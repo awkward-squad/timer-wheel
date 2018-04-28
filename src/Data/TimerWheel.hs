@@ -1,3 +1,4 @@
+{-# language CPP                 #-}
 {-# language LambdaCase          #-}
 {-# language NamedFieldPuns      #-}
 {-# language ScopedTypeVariables #-}
@@ -9,13 +10,19 @@ module Data.TimerWheel
   ( TimerWheel
   , Timer(..)
   , new
+  , stop
   , register
+  , register_
   ) where
 
+import EntriesPSQ (Entries)
+-- import Entries (Entries)
 import Entry (Entry(..), EntryId)
 import Supply (Supply)
 import Timestamp (Duration, Timestamp(Timestamp))
 
+import qualified EntriesPSQ as Entries
+-- import qualified Entries as Entries
 import qualified Entry
 import qualified Supply
 import qualified Timestamp
@@ -24,18 +31,18 @@ import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Exception
 import Control.Monad
-import Data.Fixed (E9, Fixed, div')
+import Data.Fixed (E6, E9, Fixed, div')
 import Data.Foldable
-import Data.List (partition)
 import Data.Vector (Vector)
+import System.IO.Unsafe
 
 import qualified Data.Vector as Vector
 
 -- | A 'TimerWheel' is a vector-of-linked-lists-of timers to fire. It is
 -- configured with a /bucket count/ and /accuracy/.
 --
--- An immortal reaper thread is used to step through the timer wheel and fire
--- expired timers.
+-- An reaper thread is used to step through the timer wheel and fire expired
+-- timers.
 --
 -- * The /bucket count/ determines the size of the timer vector.
 --
@@ -48,11 +55,11 @@ import qualified Data.Vector as Vector
 --       store the timer wheel.
 --
 -- * The /accuracy/ determines how often the reaper thread wakes, and thus
---     how accurately timers fire per their registered expiry time.
+--   how accurately timers fire per their registered expiry time.
 --
---     For example, with an /accuracy/ of __@1s@__, a timer that expires at
---     __@t = 2.05s@__ will not fire until the reaper thread wakes at
---     __@t = 3s@__.
+--   For example, with an /accuracy/ of __@1s@__, a timer that expires at
+--   __@t = 2.05s@__ will not fire until the reaper thread wakes at
+--   __@t = 3s@__.
 --
 --     * A __larger__ accuracy will result in __less__ accurate timers and
 --       require __less__ work by the reaper thread.
@@ -86,12 +93,12 @@ import qualified Data.Vector as Vector
 -- A timer registered to fire at __@t = 1s@__ would be bucketed into index
 -- __@2@__ and would expire on the second "lap" through the wheel when the
 -- reaper thread advances to index __@3@__.
---
 data TimerWheel = TimerWheel
   { wheelEpoch :: !Timestamp
   , wheelAccuracy :: !Duration
   , wheelSupply :: !(Supply EntryId)
-  , wheelEntries :: !(Vector (TVar [Entry]))
+  , wheelEntries :: !(Vector (TVar Entries))
+  , wheelThread :: !ThreadId
   }
 
 data Timer = Timer
@@ -105,15 +112,16 @@ data Timer = Timer
 
 -- | @new n s@ creates a 'TimerWheel' with __@n@__ buckets and an accuracy of
 -- __@s@__ seconds.
-new :: Int -> Fixed E9 -> IO TimerWheel
-new slots (Timestamp -> accuracy) = do
+new :: Int -> Fixed E6 -> IO TimerWheel
+new slots (realToFrac -> accuracy) = do
   epoch :: Timestamp <-
     Timestamp.now
 
-  wheel :: Vector (TVar [Entry]) <-
-    Vector.replicateM slots (newTVarIO [])
+  wheel :: Vector (TVar Entries) <-
+    Vector.replicateM slots (newTVarIO Entries.empty)
 
-  void (forkIO (reaper accuracy epoch wheel))
+  reaperId :: ThreadId <-
+    forkIO (reaper accuracy epoch wheel)
 
   supply :: Supply EntryId <-
     Supply.new
@@ -123,9 +131,14 @@ new slots (Timestamp -> accuracy) = do
     , wheelAccuracy = accuracy
     , wheelSupply = supply
     , wheelEntries = wheel
+    , wheelThread = reaperId
     }
 
-reaper :: Duration -> Timestamp -> Vector (TVar [Entry]) -> IO ()
+stop :: TimerWheel -> IO ()
+stop wheel =
+  killThread (wheelThread wheel)
+
+reaper :: Duration -> Timestamp -> Vector (TVar Entries) -> IO ()
 reaper accuracy epoch wheel =
   loop 0
  where
@@ -160,28 +173,34 @@ reaper accuracy epoch wheel =
     -- (count == 0) and alive (count > 0). Run the expired entries and
     -- decrement the alive entries' counts by 1.
 
+    debug (putStrLn ("Firing " ++ show (length is) ++ " buckets"))
+
     for_ is $ \k -> do
-      let entriesVar :: TVar [Entry]
+      let entriesVar :: TVar Entries
           entriesVar =
             Vector.unsafeIndex wheel k
 
       join . atomically $ do
-        readTVar entriesVar >>= \case
-          [] ->
+        entries :: Entries <-
+          readTVar entriesVar
+
+        if Entries.null entries
+          then
             pure (pure ())
+          else do
+            let (expired, alive) = Entries.squam entries
+            writeTVar entriesVar alive
 
-          entries -> do
-            let expired, alive :: [Entry]
-                (expired, alive) =
-                  partition Entry.isExpired entries
-
-            writeTVar entriesVar $! map' Entry.decrement alive
-
-            -- instance Monoid (IO ()) ;)
-            pure (foldMap (ignoreSyncException . entryAction) expired)
+            pure $ do
+              debug $
+                putStrLn $
+                  "  " ++ show (length expired) ++ " expired, "
+                    ++ show (Entries.size alive) ++ " alive"
+              -- instance Monoid (IO ()) ;)
+              foldMap ignoreSyncException expired
     loop j
 
-entriesIn :: Duration -> TimerWheel -> IO (TVar [Entry])
+entriesIn :: Duration -> TimerWheel -> IO (TVar Entries)
 entriesIn delay TimerWheel{wheelAccuracy, wheelEpoch, wheelEntries} = do
   elapsed :: Duration <-
     Timestamp.since wheelEpoch
@@ -201,46 +220,46 @@ register (Timestamp -> delay) action wheel = do
           , entryAction = action
           }
 
-  entriesVar :: TVar [Entry] <-
+  entriesVar :: TVar Entries <-
     entriesIn delay wheel
 
-  atomically (modifyTVar' entriesVar (newEntry :))
+  atomically (modifyTVar' entriesVar (Entries.insert newEntry))
 
-  entriesVarVar :: TVar (TVar [Entry]) <-
+  entriesVarVar :: TVar (TVar Entries) <-
     newTVarIO entriesVar
 
   let reset :: IO Bool
       reset = do
-        newEntriesVar :: TVar [Entry] <-
+        newEntriesVar :: TVar Entries <-
           entriesIn delay wheel
 
         atomically $ do
-          oldEntriesVar :: TVar [Entry] <-
+          oldEntriesVar :: TVar Entries <-
             readTVar entriesVarVar
 
-          oldEntries :: [Entry] <-
+          oldEntries :: Entries <-
             readTVar oldEntriesVar
 
-          case Entry.delete newEntryId oldEntries of
+          case Entries.delete newEntryId oldEntries of
             (Nothing, _) ->
               pure False
 
             (Just entry, oldEntries') -> do
               writeTVar oldEntriesVar oldEntries'
-              modifyTVar' newEntriesVar (entry :)
+              modifyTVar' newEntriesVar (Entries.insert entry)
               writeTVar entriesVarVar newEntriesVar
               pure True
 
   let cancel :: IO Bool
       cancel =
         atomically $ do
-          oldEntriesVar :: TVar [Entry] <-
+          oldEntriesVar :: TVar Entries <-
             readTVar entriesVarVar
 
-          oldEntries :: [Entry] <-
+          oldEntries :: Entries <-
             readTVar oldEntriesVar
 
-          case Entry.delete newEntryId oldEntries of
+          case Entries.delete newEntryId oldEntries of
             (Nothing, _) ->
               pure False
             (_, oldEntries') -> do
@@ -251,6 +270,26 @@ register (Timestamp -> delay) action wheel = do
     { reset = reset
     , cancel = cancel
     }
+
+-- | Like 'register', but for when you don't care to 'cancel' or 'reset' the
+-- timer.
+register_ :: Fixed E6 -> IO () -> TimerWheel -> IO ()
+register_ (realToFrac -> delay) action wheel = do
+  newEntryId :: EntryId <-
+    Supply.next (wheelSupply wheel)
+
+  let newEntry :: Entry
+      newEntry =
+        Entry
+          { entryId = newEntryId
+          , entryCount = wheelEntryCount delay wheel
+          , entryAction = action
+          }
+
+  entriesVar :: TVar Entries <-
+    entriesIn delay wheel
+
+  atomically (modifyTVar' entriesVar (Entries.insert newEntry))
 
 wheelEntryCount :: Duration -> TimerWheel -> Int
 wheelEntryCount delay TimerWheel{wheelAccuracy, wheelEntries} =
@@ -271,27 +310,20 @@ index :: Integer -> Vector a -> a
 index i v =
   Vector.unsafeIndex v (fromIntegral i `rem` Vector.length v)
 
-map' :: (a -> b) -> [a] -> [b]
-map' f = \case
-  [] ->
-    []
-
-  x:xs ->
-    let
-      !y = f x
-    in
-      y : map' f xs
-
 --------------------------------------------------------------------------------
 -- Debug functionality
 
-{-
+#ifdef DEBUG
 iolock :: MVar ()
 iolock =
   unsafePerformIO (newMVar ())
 {-# NOINLINE iolock #-}
+#endif
 
-debug :: [Char] -> IO ()
-debug msg =
-  withMVar iolock (\_ -> hPutStrLn stderr msg)
--}
+debug :: IO () -> IO ()
+debug action =
+#ifdef DEBUG
+  withMVar iolock (\_ -> action)
+#else
+  pure ()
+#endif
