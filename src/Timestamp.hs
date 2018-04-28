@@ -8,7 +8,11 @@ import System.Clock
 
 newtype Timestamp
   = Timestamp Nano
-  deriving (Eq, Ord, Num, Real)
+  deriving (Eq, Fractional, Ord, Num, Real, RealFrac)
+
+instance Show Timestamp where
+  show (Timestamp (MkFixed ns)) =
+    show ns
 
 type Duration
   = Timestamp
@@ -23,6 +27,6 @@ since :: Timestamp -> IO Duration
 since t0 =
   subtract t0 <$> now
 
-micro :: Integral a => Duration -> a
+micro :: Duration -> Int
 micro =
-  (`div'` 1000)
+  floor . (* 1000000)

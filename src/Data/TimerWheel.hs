@@ -24,13 +24,69 @@ import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Exception
 import Control.Monad
-import Data.Fixed (Nano, div')
+import Data.Fixed (E9, Fixed, div')
 import Data.Foldable
 import Data.List (partition)
 import Data.Vector (Vector)
 
 import qualified Data.Vector as Vector
 
+-- | A 'TimerWheel' is a vector-of-linked-lists-of timers to fire. It is
+-- configured with a /bucket count/ and /accuracy/.
+--
+-- An immortal reaper thread is used to step through the timer wheel and fire
+-- expired timers.
+--
+-- * The /bucket count/ determines the size of the timer vector.
+--
+--     * A __larger__ bucket count will result in __less__ 'register' contention
+--       at each individual bucket and require __more__ memory to store the
+--       timer wheel.
+--
+--     * A __smaller__ bucket count will result in __more__ 'register'
+--       contention at each individual bucket and require __less__ memory to
+--       store the timer wheel.
+--
+-- * The /accuracy/ determines how often the reaper thread wakes, and thus
+--     how accurately timers fire per their registered expiry time.
+--
+--     For example, with an /accuracy/ of __@1s@__, a timer that expires at
+--     __@t = 2.05s@__ will not fire until the reaper thread wakes at
+--     __@t = 3s@__.
+--
+--     * A __larger__ accuracy will result in __less__ accurate timers and
+--       require __less__ work by the reaper thread.
+--
+--     * A __smaller__ accuracy will result in __more__ accurate timers and
+--       require __more__ work by the reaper thread.
+--
+-- * The reaper thread has two important properties:
+--
+--     * There is only one, and it fires expired timers synchronously. If your
+--       timer actions are very cheap and execute quicky, 'register' them
+--       directly. Otherwise, consider registering an action that enqueues the
+--       real action to be performed on a queue.
+--
+--     * Synchronous exceptions are completely ignored. If you want to handle
+--       exceptions, bake that logic into the registered action itself.
+--
+-- Below is an example of a timer wheel with __@8@__ buckets and an accuracy of
+-- __@0.1s@__.
+--
+-- @
+--    0s   .1s   .2s   .3s   .4s   .5s   .6s   .7s   .8s
+--    +-----+-----+-----+-----+-----+-----+-----+-----+
+--    |     |     |     |     |     |     |     |     |
+--    +-|---+-|---+-|---+-|---+-|---+-|---+-|---+-|---+
+--      |     |     |     |     |     |     |     |
+--      |     |     |     |     |     |     |     |
+--      ∅     A     ∅     B,C   D     ∅     ∅     E,F,G
+-- @
+--
+-- A timer registered to fire at __@t = 1s@__ would be bucketed into index
+-- __@2@__ and would expire on the second "lap" through the wheel when the
+-- reaper thread advances to index __@3@__.
+--
 data TimerWheel = TimerWheel
   { wheelEpoch :: !Timestamp
   , wheelAccuracy :: !Duration
@@ -40,10 +96,16 @@ data TimerWheel = TimerWheel
 
 data Timer = Timer
   { reset :: IO Bool
+    -- ^ Reset a 'Timer'. This is equivalent to atomically 'cancel'ing it, then
+    -- 'register'ing a new one with the same delay and action. Returns 'False'
+    -- if the 'Timer' has already fired.
   , cancel :: IO Bool
+    -- ^ Cancel a 'Timer'. Returns 'False' if the 'Timer' has already fired.
   }
 
-new :: Int -> Nano -> IO TimerWheel
+-- | @new n s@ creates a 'TimerWheel' with __@n@__ buckets and an accuracy of
+-- __@s@__ seconds.
+new :: Int -> Fixed E9 -> IO TimerWheel
 new slots (Timestamp -> accuracy) = do
   epoch :: Timestamp <-
     Timestamp.now
@@ -125,7 +187,8 @@ entriesIn delay TimerWheel{wheelAccuracy, wheelEpoch, wheelEntries} = do
     Timestamp.since wheelEpoch
   pure (index ((elapsed+delay) `div'` wheelAccuracy) wheelEntries)
 
-register :: Nano -> IO () -> TimerWheel -> IO Timer
+-- | @register n m w@ an action @m@ in wheel @w@ to fire after @n@ seconds.
+register :: Fixed E9 -> IO () -> TimerWheel -> IO Timer
 register (Timestamp -> delay) action wheel = do
   newEntryId :: EntryId <-
     Supply.next (wheelSupply wheel)
@@ -218,3 +281,17 @@ map' f = \case
       !y = f x
     in
       y : map' f xs
+
+--------------------------------------------------------------------------------
+-- Debug functionality
+
+{-
+iolock :: MVar ()
+iolock =
+  unsafePerformIO (newMVar ())
+{-# NOINLINE iolock #-}
+
+debug :: [Char] -> IO ()
+debug msg =
+  withMVar iolock (\_ -> hPutStrLn stderr msg)
+-}
