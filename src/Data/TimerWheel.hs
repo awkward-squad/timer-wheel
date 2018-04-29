@@ -1,4 +1,4 @@
-{-# language CPP                 #-}
+-- {-# language CPP                 #-}
 {-# language LambdaCase          #-}
 {-# language MagicHash           #-}
 {-# language NamedFieldPuns      #-}
@@ -16,15 +16,11 @@ module Data.TimerWheel
   , register_
   ) where
 
-import EntriesPSQ (Entries)
--- import Entries (Entries)
-import Entry (Entry(..), EntryId)
+import Entries (Entries)
 import Supply (Supply)
 import Timestamp (Duration, Timestamp(Timestamp))
 
-import qualified EntriesPSQ as Entries
--- import qualified Entries as Entries
-import qualified Entry
+import qualified Entries as Entries
 import qualified Supply
 import qualified Timestamp
 
@@ -97,7 +93,7 @@ import System.IO.Unsafe
 data TimerWheel = TimerWheel
   { wheelEpoch :: !Timestamp
   , wheelAccuracy :: !Duration
-  , wheelSupply :: !(Supply EntryId)
+  , wheelSupply :: !(Supply Int)
   , wheelEntries :: !(UnliftedArray (TVar Entries))
   , wheelThread :: !ThreadId
   }
@@ -128,7 +124,7 @@ new slots (realToFrac -> accuracy) = do
   reaperId :: ThreadId <-
     forkIO (reaper accuracy epoch wheel)
 
-  supply :: Supply EntryId <-
+  supply :: Supply Int <-
     Supply.new
 
   pure TimerWheel
@@ -214,21 +210,15 @@ entriesIn delay TimerWheel{wheelAccuracy, wheelEpoch, wheelEntries} = do
 -- | @register n m w@ an action @m@ in wheel @w@ to fire after @n@ seconds.
 register :: Fixed E9 -> IO () -> TimerWheel -> IO Timer
 register (Timestamp -> delay) action wheel = do
-  newEntryId :: EntryId <-
+  newEntryId :: Int <-
     Supply.next (wheelSupply wheel)
-
-  let newEntry :: Entry
-      newEntry =
-        Entry
-          { entryId = newEntryId
-          , entryCount = wheelEntryCount delay wheel
-          , entryAction = action
-          }
 
   entriesVar :: TVar Entries <-
     entriesIn delay wheel
 
-  atomically (modifyTVar' entriesVar (Entries.insert newEntry))
+  atomically
+    (modifyTVar' entriesVar
+      (Entries.insert newEntryId (wheelEntryCount delay wheel) action))
 
   entriesVarVar :: TVar (TVar Entries) <-
     newTVarIO entriesVar
@@ -249,9 +239,9 @@ register (Timestamp -> delay) action wheel = do
             (Nothing, _) ->
               pure False
 
-            (Just entry, oldEntries') -> do
+            (Just insert, oldEntries') -> do
               writeTVar oldEntriesVar oldEntries'
-              modifyTVar' newEntriesVar (Entries.insert entry)
+              modifyTVar' newEntriesVar insert
               writeTVar entriesVarVar newEntriesVar
               pure True
 
@@ -280,21 +270,15 @@ register (Timestamp -> delay) action wheel = do
 -- timer.
 register_ :: Fixed E6 -> IO () -> TimerWheel -> IO ()
 register_ (realToFrac -> delay) action wheel = do
-  newEntryId :: EntryId <-
+  newEntryId :: Int <-
     Supply.next (wheelSupply wheel)
-
-  let newEntry :: Entry
-      newEntry =
-        Entry
-          { entryId = newEntryId
-          , entryCount = wheelEntryCount delay wheel
-          , entryAction = action
-          }
 
   entriesVar :: TVar Entries <-
     entriesIn delay wheel
 
-  atomically (modifyTVar' entriesVar (Entries.insert newEntry))
+  atomically
+    (modifyTVar' entriesVar
+      (Entries.insert newEntryId (wheelEntryCount delay wheel) action))
 
 wheelEntryCount :: Duration -> TimerWheel -> Int
 wheelEntryCount delay TimerWheel{wheelAccuracy, wheelEntries} =
@@ -318,20 +302,20 @@ index i v =
 --------------------------------------------------------------------------------
 -- Debug functionality
 
-#ifdef DEBUG
+-- #ifdef DEBUG
 iolock :: MVar ()
 iolock =
   unsafePerformIO (newMVar ())
 {-# NOINLINE iolock #-}
-#endif
+-- #endif
 
 debug :: IO () -> IO ()
 debug action =
-#ifdef DEBUG
+-- #ifdef DEBUG
   withMVar iolock (\_ -> action)
-#else
-  pure ()
-#endif
+-- #else
+--   pure ()
+-- #endif
 
 --------------------------------------------------------------------------------
 -- Orphans

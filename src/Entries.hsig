@@ -1,0 +1,10 @@
+signature Entries where
+
+data Entries
+
+empty :: Entries
+null :: Entries -> Bool
+size :: Entries -> Int
+insert :: Int -> Int -> IO () -> Entries -> Entries
+delete :: Int -> Entries -> (Maybe (Entries -> Entries), Entries)
+squam :: Entries -> ([IO ()], Entries)

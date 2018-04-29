@@ -1,16 +1,14 @@
 {-# language LambdaCase #-}
 
-module EntriesPSQ
+module Entries.PSQ
   ( Entries
   , empty
-  , EntriesPSQ.null
+  , Entries.PSQ.null
   , size
   , insert
   , delete
   , squam
   ) where
-
-import Entry
 
 import Data.IntPSQ (IntPSQ)
 
@@ -34,23 +32,23 @@ size (Entries xs) =
   IntPSQ.size xs
 {-# INLINABLE size #-}
 
-insert :: Entry -> Entries -> Entries
-insert (Entry (EntryId i) n m) (Entries xs) =
+insert :: Int -> Int -> IO () -> Entries -> Entries
+insert i n m (Entries xs) =
   Entries (IntPSQ.insert i n m xs)
 {-# INLINABLE insert #-}
 
-delete :: EntryId -> Entries -> (Maybe Entry, Entries)
-delete (EntryId i) (Entries xs) =
+delete :: Int -> Entries -> (Maybe (Entries -> Entries), Entries)
+delete i (Entries xs) =
   case IntPSQ.alter f i xs of
     (entry, xs') ->
       (entry, Entries xs')
  where
-  f :: Maybe (Int, IO ()) -> (Maybe Entry, Maybe (Int, IO ()))
+  f :: Maybe (Int, IO ()) -> (Maybe (Entries -> Entries), Maybe (Int, IO ()))
   f = \case
     Nothing ->
       (Nothing, Nothing)
     Just (n, m)  ->
-      (Just (Entry (EntryId i) n m), Nothing)
+      (Just (insert i n m), Nothing)
 {-# INLINABLE delete #-}
 
 squam :: Entries -> ([IO ()], Entries)

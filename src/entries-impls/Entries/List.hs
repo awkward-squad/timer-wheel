@@ -1,21 +1,25 @@
 {-# language LambdaCase #-}
 
-module Entries
+module Entries.List
   ( Entries
   , empty
-  , Entries.null
+  , Entries.List.null
   , size
   , insert
   , delete
   , squam
   ) where
 
-import Entry
-
 import Data.List (partition)
 
 newtype Entries
   = Entries [Entry]
+
+data Entry = Entry
+  { entryId :: {-# UNPACK #-} !Int
+  , entryCount :: {-# UNPACK #-} !Int
+  , entryAction :: IO ()
+  }
 
 empty :: Entries
 empty =
@@ -34,22 +38,27 @@ size (Entries xs) =
   length xs
 {-# INLINABLE size #-}
 
-insert :: Entry -> Entries -> Entries
-insert x (Entries xs) =
-  Entries (x:xs)
+insert :: Int -> Int -> IO () -> Entries -> Entries
+insert i n m (Entries entries) =
+  let
+    entry :: Entry
+    !entry =
+      Entry i n m
+  in
+    Entries (entry : entries)
 {-# INLINABLE insert #-}
 
-delete :: EntryId -> Entries -> (Maybe Entry, Entries)
+delete :: Int -> Entries -> (Maybe (Entries -> Entries), Entries)
 delete i (Entries xs0) =
   go [] xs0
  where
-  go :: [Entry] -> [Entry] -> (Maybe Entry, Entries)
+  go :: [Entry] -> [Entry] -> (Maybe (Entries -> Entries), Entries)
   go acc = \case
     [] ->
       (Nothing, Entries acc)
-    x:xs
-      | i == entryId x ->
-          (Just x, Entries (acc ++ xs))
+    x@(Entry j n m):xs
+      | i == j ->
+          (Just (insert j n m), Entries (acc ++ xs))
       | otherwise ->
           go (x:acc) xs
 {-# INLINABLE delete #-}

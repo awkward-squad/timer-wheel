@@ -10,25 +10,44 @@ import System.Environment
 import System.IO.Unsafe
 import System.Random
 
-import qualified Data.TimerWheel as TimerWheel
+import qualified Data.TimerWheel.List as TimerWheel.List
+import qualified Data.TimerWheel.PSQ as TimerWheel.PSQ
 
 main :: IO ()
 main =
   getArgs >>= \case
-    ["wheel", n, m] -> timerWheelMain (read n) (read m)
-    ["ghc", n, m] -> ghcMain (read n) (read m)
+    ["wheel-list", n, m] ->
+      timerWheelListMain (read n) (read m)
+    ["wheel-psq", n, m] ->
+      timerWheelPsqMain (read n) (read m)
+    ["ghc", n, m] ->
+      ghcMain (read n) (read m)
+    _ ->
+      putStrLn "Expecting args: (wheel-list|wheel-psq|ghc) N M"
 
-timerWheelMain :: Int -> Int -> IO ()
-timerWheelMain n m = do
-  wheel <- TimerWheel.new (2^(16::Int)) (1/10)
+timerWheelListMain :: Int -> Int -> IO ()
+timerWheelListMain n m = do
+  wheel <- TimerWheel.List.new (2^(16::Int)) (1/10)
 
   replicateConcurrently_ n $ do
     timers <-
       replicateM m $ do
         s:ss <- readIORef doublesRef
         writeIORef doublesRef ss
-        TimerWheel.register (realToFrac s) (pure ()) wheel
-    for_ timers TimerWheel.cancel
+        TimerWheel.List.register (realToFrac s) (pure ()) wheel
+    for_ timers TimerWheel.List.cancel
+
+timerWheelPsqMain :: Int -> Int -> IO ()
+timerWheelPsqMain n m = do
+  wheel <- TimerWheel.PSQ.new (2^(16::Int)) (1/10)
+
+  replicateConcurrently_ n $ do
+    timers <-
+      replicateM m $ do
+        s:ss <- readIORef doublesRef
+        writeIORef doublesRef ss
+        TimerWheel.PSQ.register (realToFrac s) (pure ()) wheel
+    for_ timers TimerWheel.PSQ.cancel
 
 ghcMain :: Int -> Int -> IO ()
 ghcMain n m = do
