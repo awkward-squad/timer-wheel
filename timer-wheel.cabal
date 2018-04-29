@@ -14,9 +14,10 @@ library
       atomic-primops
     , base
     , clock
+    , ghc-prim
+    , primitive
     , psqueues
     , stm
-    , vector
   exposed-modules:
     Data.TimerWheel
   other-modules:

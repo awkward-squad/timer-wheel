@@ -1,5 +1,6 @@
 {-# language CPP                 #-}
 {-# language LambdaCase          #-}
+{-# language MagicHash           #-}
 {-# language NamedFieldPuns      #-}
 {-# language ScopedTypeVariables #-}
 {-# language ViewPatterns        #-}
@@ -33,10 +34,10 @@ import Control.Exception
 import Control.Monad
 import Data.Fixed (E6, E9, Fixed, div')
 import Data.Foldable
-import Data.Vector (Vector)
+import Data.Primitive.UnliftedArray
+import GHC.Conc (TVar(TVar))
+import GHC.Prim (RealWorld, unsafeCoerce#)
 import System.IO.Unsafe
-
-import qualified Data.Vector as Vector
 
 -- | A 'TimerWheel' is a vector-of-linked-lists-of timers to fire. It is
 -- configured with a /bucket count/ and /accuracy/.
@@ -97,7 +98,7 @@ data TimerWheel = TimerWheel
   { wheelEpoch :: !Timestamp
   , wheelAccuracy :: !Duration
   , wheelSupply :: !(Supply EntryId)
-  , wheelEntries :: !(Vector (TVar Entries))
+  , wheelEntries :: !(UnliftedArray (TVar Entries))
   , wheelThread :: !ThreadId
   }
 
@@ -117,8 +118,12 @@ new slots (realToFrac -> accuracy) = do
   epoch :: Timestamp <-
     Timestamp.now
 
-  wheel :: Vector (TVar Entries) <-
-    Vector.replicateM slots (newTVarIO Entries.empty)
+  wheel :: UnliftedArray (TVar Entries) <- do
+    wheel :: MutableUnliftedArray RealWorld (TVar Entries) <-
+      unsafeNewUnliftedArray slots
+    for_ [0..slots-1] $ \i ->
+      writeUnliftedArray wheel i =<< newTVarIO Entries.empty
+    freezeUnliftedArray wheel 0 slots
 
   reaperId :: ThreadId <-
     forkIO (reaper accuracy epoch wheel)
@@ -138,7 +143,7 @@ stop :: TimerWheel -> IO ()
 stop wheel =
   killThread (wheelThread wheel)
 
-reaper :: Duration -> Timestamp -> Vector (TVar Entries) -> IO ()
+reaper :: Duration -> Timestamp -> UnliftedArray (TVar Entries) -> IO ()
 reaper accuracy epoch wheel =
   loop 0
  where
@@ -159,7 +164,7 @@ reaper accuracy epoch wheel =
 
     let j :: Int
         j =
-          fromInteger (elapsed `div'` accuracy) `mod` Vector.length wheel
+          fromInteger (elapsed `div'` accuracy) `mod` sizeofUnliftedArray wheel
 
     let is :: [Int]
         is =
@@ -167,7 +172,7 @@ reaper accuracy epoch wheel =
             then
               [i .. j-1]
             else
-              [i .. Vector.length wheel - 1] ++ [0 .. j-1]
+              [i .. sizeofUnliftedArray wheel - 1] ++ [0 .. j-1]
 
     -- To actually run the entries in a bucket, partition them into expired
     -- (count == 0) and alive (count > 0). Run the expired entries and
@@ -178,7 +183,7 @@ reaper accuracy epoch wheel =
     for_ is $ \k -> do
       let entriesVar :: TVar Entries
           entriesVar =
-            Vector.unsafeIndex wheel k
+            indexUnliftedArray wheel k
 
       join . atomically $ do
         entries :: Entries <-
@@ -295,7 +300,7 @@ wheelEntryCount :: Duration -> TimerWheel -> Int
 wheelEntryCount delay TimerWheel{wheelAccuracy, wheelEntries} =
   fromInteger
     (delay `div'`
-      (fromIntegral (Vector.length wheelEntries) * wheelAccuracy))
+      (fromIntegral (sizeofUnliftedArray wheelEntries) * wheelAccuracy))
 
 ignoreSyncException :: IO () -> IO ()
 ignoreSyncException action =
@@ -306,9 +311,9 @@ ignoreSyncException action =
       _ ->
         pure ()
 
-index :: Integer -> Vector a -> a
+index :: PrimUnlifted a => Integer -> UnliftedArray a -> a
 index i v =
-  Vector.unsafeIndex v (fromIntegral i `rem` Vector.length v)
+  indexUnliftedArray v (fromIntegral i `rem` sizeofUnliftedArray v)
 
 --------------------------------------------------------------------------------
 -- Debug functionality
@@ -327,3 +332,13 @@ debug action =
 #else
   pure ()
 #endif
+
+--------------------------------------------------------------------------------
+-- Orphans
+
+-- Waiting for new primitive release:
+--
+-- https://github.com/haskell/primitive/commit/919a3e6ebd9b41cce55fba1d24021c6c34bfce32
+instance PrimUnlifted (TVar a) where
+  toArrayArray# (TVar tv#) = unsafeCoerce# tv#
+  fromArrayArray# tv# = TVar (unsafeCoerce# tv#)
