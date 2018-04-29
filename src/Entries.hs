@@ -1,6 +1,14 @@
 {-# language LambdaCase #-}
 
-module Entries where
+module Entries
+  ( Entries
+  , empty
+  , Entries.null
+  , size
+  , insert
+  , delete
+  , squam
+  ) where
 
 import Entry
 
@@ -19,14 +27,17 @@ null = \case
     True
   _ ->
     False
+{-# INLINABLE null #-}
 
 size :: Entries -> Int
 size (Entries xs) =
   length xs
+{-# INLINABLE size #-}
 
 insert :: Entry -> Entries -> Entries
 insert x (Entries xs) =
   Entries (x:xs)
+{-# INLINABLE insert #-}
 
 delete :: EntryId -> Entries -> (Maybe Entry, Entries)
 delete i (Entries xs0) =
@@ -41,6 +52,7 @@ delete i (Entries xs0) =
           (Just x, Entries (acc ++ xs))
       | otherwise ->
           go (x:acc) xs
+{-# INLINABLE delete #-}
 
 squam :: Entries -> ([IO ()], Entries)
 squam (Entries entries) =
@@ -49,6 +61,7 @@ squam (Entries entries) =
       partition ((== 0) . entryCount) entries
   in
     (map entryAction expired, Entries (map' decrement alive))
+{-# INLINABLE squam #-}
 
 decrement :: Entry -> Entry
 decrement entry =

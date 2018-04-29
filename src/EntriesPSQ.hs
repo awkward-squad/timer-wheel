@@ -1,6 +1,14 @@
 {-# language LambdaCase #-}
 
-module EntriesPSQ where
+module EntriesPSQ
+  ( Entries
+  , empty
+  , EntriesPSQ.null
+  , size
+  , insert
+  , delete
+  , squam
+  ) where
 
 import Entry
 
@@ -14,18 +22,22 @@ newtype Entries
 empty :: Entries
 empty =
   Entries IntPSQ.empty
+{-# INLINABLE empty #-}
 
 null :: Entries -> Bool
 null (Entries xs) =
   IntPSQ.null xs
+{-# INLINABLE null #-}
 
 size :: Entries -> Int
 size (Entries xs) =
   IntPSQ.size xs
+{-# INLINABLE size #-}
 
 insert :: Entry -> Entries -> Entries
 insert (Entry (EntryId i) n m) (Entries xs) =
   Entries (IntPSQ.insert i n m xs)
+{-# INLINABLE insert #-}
 
 delete :: EntryId -> Entries -> (Maybe Entry, Entries)
 delete (EntryId i) (Entries xs) =
@@ -39,6 +51,7 @@ delete (EntryId i) (Entries xs) =
       (Nothing, Nothing)
     Just (n, m)  ->
       (Just (Entry (EntryId i) n m), Nothing)
+{-# INLINABLE delete #-}
 
 squam :: Entries -> ([IO ()], Entries)
 squam (Entries entries) =
@@ -53,3 +66,4 @@ squam (Entries entries) =
   g :: Int -> Int -> IO () -> (Int, IO ())
   g _ n m =
     (n-1, m)
+{-# INLINABLE squam #-}

@@ -2,8 +2,8 @@
 
 module Supply where
 
-import Data.Atomics.Counter
-import Data.Coerce
+import Data.Atomics.Counter (AtomicCounter, incrCounter, newCounter)
+import Data.Coerce (Coercible, coerce)
 
 newtype Supply a
   = Supply AtomicCounter
@@ -15,3 +15,4 @@ new =
 next :: Coercible Int a => Supply a -> IO a
 next (Supply counter) =
   coerce <$> incrCounter 1 counter
+{-# INLINABLE next #-}

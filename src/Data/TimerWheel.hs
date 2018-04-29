@@ -39,7 +39,7 @@ import GHC.Conc (TVar(TVar))
 import GHC.Prim (RealWorld, unsafeCoerce#)
 import System.IO.Unsafe
 
--- | A 'TimerWheel' is a vector-of-linked-lists-of timers to fire. It is
+-- | A 'TimerWheel' is a vector-of-collections-of timers to fire. It is
 -- configured with a /bucket count/ and /accuracy/.
 --
 -- An reaper thread is used to step through the timer wheel and fire expired
