@@ -21,6 +21,7 @@ library timer-wheel-indef
   exposed-modules:
     Data.TimerWheel
   other-modules:
+    Debug
     Supply
     Timestamp
   if flag(debug)

@@ -27,7 +27,7 @@ main =
 
 timerWheelListMain :: Int -> Int -> IO ()
 timerWheelListMain n m = do
-  wheel <- TimerWheel.List.new (2^(16::Int)) (1/10)
+  wheel <- TimerWheel.List.new (2^(16::Int)) (1/100)
 
   replicateConcurrently_ n $ do
     timers <-
@@ -35,11 +35,11 @@ timerWheelListMain n m = do
         s:ss <- readIORef doublesRef
         writeIORef doublesRef ss
         TimerWheel.List.register (realToFrac s) (pure ()) wheel
-    for_ timers TimerWheel.List.cancel
+    for_ (everyOther timers) TimerWheel.List.cancel
 
 timerWheelPsqMain :: Int -> Int -> IO ()
 timerWheelPsqMain n m = do
-  wheel <- TimerWheel.PSQ.new (2^(16::Int)) (1/10)
+  wheel <- TimerWheel.PSQ.new (2^(16::Int)) (1/100)
 
   replicateConcurrently_ n $ do
     timers <-
@@ -47,7 +47,7 @@ timerWheelPsqMain n m = do
         s:ss <- readIORef doublesRef
         writeIORef doublesRef ss
         TimerWheel.PSQ.register (realToFrac s) (pure ()) wheel
-    for_ timers TimerWheel.PSQ.cancel
+    for_ (everyOther timers) TimerWheel.PSQ.cancel
 
 ghcMain :: Int -> Int -> IO ()
 ghcMain n m = do
@@ -59,7 +59,21 @@ ghcMain n m = do
         s:ss <- readIORef intsRef
         writeIORef intsRef ss
         registerTimeout mgr s (pure ())
-    for_ timers (unregisterTimeout mgr)
+    for_ (everyOther timers) (unregisterTimeout mgr)
+
+everyOther :: [a] -> [a]
+everyOther = \case
+  [] ->
+    []
+  x:xs ->
+    x : otherEvery xs
+
+otherEvery :: [a] -> [a]
+otherEvery = \case
+  [] ->
+    []
+  _:xs ->
+    everyOther xs
 
 doublesRef :: IORef [Double]
 doublesRef =

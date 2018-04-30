@@ -1,4 +1,3 @@
--- {-# language CPP                 #-}
 {-# language LambdaCase          #-}
 {-# language MagicHash           #-}
 {-# language NamedFieldPuns      #-}
@@ -16,6 +15,7 @@ module Data.TimerWheel
   , register_
   ) where
 
+import Debug (debug)
 import Entries (Entries)
 import Supply (Supply)
 import Timestamp (Duration, Timestamp(Timestamp))
@@ -33,7 +33,6 @@ import Data.Foldable
 import Data.Primitive.UnliftedArray
 import GHC.Conc (TVar(TVar))
 import GHC.Prim (RealWorld, unsafeCoerce#)
-import System.IO.Unsafe
 
 -- | A 'TimerWheel' is a vector-of-collections-of timers to fire. It is
 -- configured with a /bucket count/ and /accuracy/.
@@ -298,24 +297,6 @@ ignoreSyncException action =
 index :: PrimUnlifted a => Integer -> UnliftedArray a -> a
 index i v =
   indexUnliftedArray v (fromIntegral i `rem` sizeofUnliftedArray v)
-
---------------------------------------------------------------------------------
--- Debug functionality
-
--- #ifdef DEBUG
-iolock :: MVar ()
-iolock =
-  unsafePerformIO (newMVar ())
-{-# NOINLINE iolock #-}
--- #endif
-
-debug :: IO () -> IO ()
-debug action =
--- #ifdef DEBUG
-  withMVar iolock (\_ -> action)
--- #else
---   pure ()
--- #endif
 
 --------------------------------------------------------------------------------
 -- Orphans
