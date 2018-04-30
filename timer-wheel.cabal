@@ -16,7 +16,6 @@ library timer-wheel-indef
     , clock
     , ghc-prim
     , primitive
-    , stm
   signatures: Entries
   exposed-modules:
     Data.TimerWheel

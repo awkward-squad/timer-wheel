@@ -24,21 +24,18 @@ main =
         (read m)
         TimerWheel.List.new
         TimerWheel.List.register
-        TimerWheel.List.cancel
     ["wheel-sorted-list", n, m] ->
       timerWheelMain
         (read n)
         (read m)
         TimerWheel.SortedList.new
         TimerWheel.SortedList.register
-        TimerWheel.SortedList.cancel
     ["wheel-psq", n, m] ->
       timerWheelMain
         (read n)
         (read m)
         TimerWheel.PSQ.new
         TimerWheel.PSQ.register
-        TimerWheel.PSQ.cancel
     ["ghc", n, m] ->
       ghcMain (read n) (read m)
     _ ->
@@ -48,12 +45,11 @@ timerWheelMain
   :: Int
   -> Int
   -> (Int -> Fixed E6 -> IO wheel)
-  -> (Fixed E9 -> IO () -> wheel -> IO timer)
-  -> (timer -> IO Bool)
+  -> (Fixed E6 -> IO () -> wheel -> IO (IO Bool))
   -> IO ()
-timerWheelMain n m new register cancel = do
+timerWheelMain n m new register = do
   wheel <-
-    new (2^(16::Int)) (1/100)
+    new (2^(16::Int)) (1/1000000)
 
   replicateConcurrently_ n $ do
     timers <-
@@ -61,7 +57,7 @@ timerWheelMain n m new register cancel = do
         s:ss <- readIORef doublesRef
         writeIORef doublesRef ss
         register (realToFrac s) (pure ()) wheel
-    for_ (everyOther timers) cancel
+    for_ (everyOther timers) id
 
 ghcMain :: Int -> Int -> IO ()
 ghcMain n m = do

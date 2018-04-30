@@ -8,7 +8,6 @@
 
 module Data.TimerWheel
   ( TimerWheel
-  , Timer(..)
   , new
   , stop
   , register
@@ -18,21 +17,22 @@ module Data.TimerWheel
 import Debug (debug)
 import Entries (Entries)
 import Supply (Supply)
-import Timestamp (Duration, Timestamp(Timestamp))
+import Timestamp (Duration, Timestamp)
 
 import qualified Entries as Entries
 import qualified Supply
 import qualified Timestamp
 
 import Control.Concurrent
-import Control.Concurrent.STM
 import Control.Exception
 import Control.Monad
-import Data.Fixed (E6, E9, Fixed, div')
+import Data.Fixed (E6, Fixed, div')
 import Data.Foldable
+import Data.Primitive.MutVar
 import Data.Primitive.UnliftedArray
-import GHC.Conc (TVar(TVar))
-import GHC.Prim (RealWorld, unsafeCoerce#)
+import GHC.Prim (RealWorld)
+
+import qualified GHC.Event as GHC
 
 -- | A 'TimerWheel' is a vector-of-collections-of timers to fire. It is
 -- configured with a /bucket count/ and /accuracy/.
@@ -93,17 +93,8 @@ data TimerWheel = TimerWheel
   { wheelEpoch :: !Timestamp
   , wheelAccuracy :: !Duration
   , wheelSupply :: !Supply
-  , wheelEntries :: !(UnliftedArray (TVar Entries))
+  , wheelEntries :: !(UnliftedArray (MutVar RealWorld Entries))
   , wheelThread :: !ThreadId
-  }
-
-data Timer = Timer
-  { reset :: IO Bool
-    -- ^ Reset a 'Timer'. This is equivalent to atomically 'cancel'ing it, then
-    -- 'register'ing a new one with the same delay and action. Returns 'False'
-    -- if the 'Timer' has already fired.
-  , cancel :: IO Bool
-    -- ^ Cancel a 'Timer'. Returns 'False' if the 'Timer' has already fired.
   }
 
 -- | @new n s@ creates a 'TimerWheel' with __@n@__ buckets and an accuracy of
@@ -113,11 +104,11 @@ new slots (realToFrac -> accuracy) = do
   epoch :: Timestamp <-
     Timestamp.now
 
-  wheel :: UnliftedArray (TVar Entries) <- do
-    wheel :: MutableUnliftedArray RealWorld (TVar Entries) <-
+  wheel :: UnliftedArray (MutVar RealWorld Entries) <- do
+    wheel :: MutableUnliftedArray RealWorld (MutVar RealWorld Entries) <-
       unsafeNewUnliftedArray slots
     for_ [0..slots-1] $ \i ->
-      writeUnliftedArray wheel i =<< newTVarIO Entries.empty
+      writeUnliftedArray wheel i =<< newMutVar Entries.empty
     freezeUnliftedArray wheel 0 slots
 
   reaperId :: ThreadId <-
@@ -138,15 +129,25 @@ stop :: TimerWheel -> IO ()
 stop wheel =
   killThread (wheelThread wheel)
 
-reaper :: Duration -> Timestamp -> UnliftedArray (TVar Entries) -> IO ()
-reaper accuracy epoch wheel =
-  loop 0
+reaper :: Duration -> Timestamp -> UnliftedArray (MutVar RealWorld Entries) -> IO ()
+reaper accuracy epoch wheel = do
+  manager :: GHC.TimerManager <-
+    GHC.getSystemTimerManager
+  loop manager 0
  where
   -- Reaper loop: we haven't yet run the entries at index 'i'.
-  loop :: Int -> IO ()
-  loop i = do
+  loop :: GHC.TimerManager -> Int -> IO ()
+  loop manager i = do
     -- Sleep until the roughly the next bucket.
-    threadDelay (Timestamp.micro accuracy)
+    waitVar :: MVar () <-
+      newEmptyMVar
+    mask_ $ do
+      key :: GHC.TimeoutKey <-
+        GHC.registerTimeout
+          manager
+          (Timestamp.micro accuracy)
+          (putMVar waitVar ())
+      takeMVar waitVar `onException` GHC.unregisterTimeout manager key
 
     elapsed :: Timestamp <-
       Timestamp.since epoch
@@ -176,108 +177,61 @@ reaper accuracy epoch wheel =
     debug (putStrLn ("Firing " ++ show (length is) ++ " buckets"))
 
     for_ is $ \k -> do
-      let entriesVar :: TVar Entries
-          entriesVar =
+      let entriesRef :: MutVar RealWorld Entries
+          entriesRef =
             indexUnliftedArray wheel k
 
-      join . atomically $ do
-        entries :: Entries <-
-          readTVar entriesVar
+      join
+        (atomicModifyMutVar' entriesRef
+          (\entries ->
+            if Entries.null entries
+              then
+                (entries, pure () :: IO ())
+              else
+                case Entries.squam entries of
+                  (expired, alive) ->
+                    (alive, do
+                      debug $
+                        putStrLn $
+                          "  " ++ show (length expired) ++ " expired, "
+                            ++ show (Entries.size alive) ++ " alive"
+                      -- instance Monoid (IO ()) ;)
+                      foldMap ignoreSyncException expired)))
+    loop manager j
 
-        if Entries.null entries
-          then
-            pure (pure ())
-          else do
-            let (expired, alive) = Entries.squam entries
-            writeTVar entriesVar alive
-
-            pure $ do
-              debug $
-                putStrLn $
-                  "  " ++ show (length expired) ++ " expired, "
-                    ++ show (Entries.size alive) ++ " alive"
-              -- instance Monoid (IO ()) ;)
-              foldMap ignoreSyncException expired
-    loop j
-
-entriesIn :: Duration -> TimerWheel -> IO (TVar Entries)
+entriesIn :: Duration -> TimerWheel -> IO (MutVar RealWorld Entries)
 entriesIn delay TimerWheel{wheelAccuracy, wheelEpoch, wheelEntries} = do
   elapsed :: Duration <-
     Timestamp.since wheelEpoch
   pure (index ((elapsed+delay) `div'` wheelAccuracy) wheelEntries)
 
 -- | @register n m w@ an action @m@ in wheel @w@ to fire after @n@ seconds.
-register :: Fixed E9 -> IO () -> TimerWheel -> IO Timer
-register (Timestamp -> delay) action wheel = do
+register :: Fixed E6 -> IO () -> TimerWheel -> IO (IO Bool)
+register (realToFrac -> delay) action wheel = do
   newEntryId :: Int <-
     Supply.next (wheelSupply wheel)
 
-  entriesVar :: TVar Entries <-
+  entriesVar :: MutVar RealWorld Entries <-
     entriesIn delay wheel
 
-  atomically
-    (modifyTVar' entriesVar
-      (Entries.insert newEntryId (wheelEntryCount delay wheel) action))
+  atomicModifyMutVar' entriesVar
+    (\entries ->
+      (Entries.insert newEntryId (wheelEntryCount delay wheel) action entries, ()))
 
-  entriesVarVar :: TVar (TVar Entries) <-
-    newTVarIO entriesVar
-
-  let reset :: IO Bool
-      reset = do
-        newEntriesVar :: TVar Entries <-
-          entriesIn delay wheel
-
-        atomically $ do
-          oldEntriesVar :: TVar Entries <-
-            readTVar entriesVarVar
-
-          oldEntries :: Entries <-
-            readTVar oldEntriesVar
-
-          case Entries.delete newEntryId oldEntries of
-            (Nothing, _) ->
-              pure False
-
-            (Just insert, oldEntries') -> do
-              writeTVar oldEntriesVar oldEntries'
-              modifyTVar' newEntriesVar insert
-              writeTVar entriesVarVar newEntriesVar
-              pure True
-
-  let cancel :: IO Bool
-      cancel =
-        atomically $ do
-          oldEntriesVar :: TVar Entries <-
-            readTVar entriesVarVar
-
-          oldEntries :: Entries <-
-            readTVar oldEntriesVar
-
-          case Entries.delete newEntryId oldEntries of
-            (Nothing, _) ->
-              pure False
-            (_, oldEntries') -> do
-              writeTVar oldEntriesVar oldEntries'
-              pure True
-
-  pure Timer
-    { reset = reset
-    , cancel = cancel
-    }
+  pure $ do
+    atomicModifyMutVar' entriesVar
+      (\entries ->
+        case Entries.delete newEntryId entries of
+          (Nothing, _) ->
+            (entries, False)
+          (Just _, entries') ->
+            (entries', True))
 
 -- | Like 'register', but for when you don't care to 'cancel' or 'reset' the
 -- timer.
 register_ :: Fixed E6 -> IO () -> TimerWheel -> IO ()
-register_ (realToFrac -> delay) action wheel = do
-  newEntryId :: Int <-
-    Supply.next (wheelSupply wheel)
-
-  entriesVar :: TVar Entries <-
-    entriesIn delay wheel
-
-  atomically
-    (modifyTVar' entriesVar
-      (Entries.insert newEntryId (wheelEntryCount delay wheel) action))
+register_ delay action wheel =
+  void (register delay action wheel)
 
 wheelEntryCount :: Duration -> TimerWheel -> Int
 wheelEntryCount delay TimerWheel{wheelAccuracy, wheelEntries} =
@@ -297,13 +251,3 @@ ignoreSyncException action =
 index :: PrimUnlifted a => Integer -> UnliftedArray a -> a
 index i v =
   indexUnliftedArray v (fromIntegral i `rem` sizeofUnliftedArray v)
-
---------------------------------------------------------------------------------
--- Orphans
-
--- Waiting for new primitive release:
---
--- https://github.com/haskell/primitive/commit/919a3e6ebd9b41cce55fba1d24021c6c34bfce32
-instance PrimUnlifted (TVar a) where
-  toArrayArray# (TVar tv#) = unsafeCoerce# tv#
-  fromArrayArray# tv# = TVar (unsafeCoerce# tv#)
