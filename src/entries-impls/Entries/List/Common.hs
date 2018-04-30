@@ -9,12 +9,14 @@ module Entries.List.Common
   , decrement
   ) where
 
+import Data.Word (Word64)
+
 newtype Entries
   = Entries [Entry]
 
 data Entry = Entry
   { entryId :: {-# UNPACK #-} !Int
-  , entryCount :: {-# UNPACK #-} !Int
+  , entryCount :: {-# UNPACK #-} !Word64
   , entryAction :: IO ()
   }
 

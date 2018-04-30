@@ -16,19 +16,18 @@ module Data.TimerWheel
 import Debug (debug)
 import Entries (Entries)
 import Supply (Supply)
-import Timestamp (Duration, Timestamp)
 
 import qualified Entries as Entries
 import qualified Supply
-import qualified Timestamp
 
 import Control.Concurrent
 import Control.Exception
 import Control.Monad
-import Data.Fixed (E6, Fixed, div')
 import Data.Foldable
 import Data.Primitive.MutVar
 import Data.Primitive.UnliftedArray
+import Data.Word (Word64)
+import GHC.Clock (getMonotonicTimeNSec)
 import GHC.Prim (RealWorld)
 
 import qualified GHC.Event as GHC
@@ -89,16 +88,16 @@ import qualified GHC.Event as GHC
 -- __@2@__ and would expire on the second "lap" through the wheel when the
 -- reaper thread advances to index __@3@__.
 data TimerWheel = TimerWheel
-  { wheelAccuracy :: !Duration
+  { wheelAccuracy :: !Word64
   , wheelSupply :: !Supply
   , wheelEntries :: !(UnliftedArray (MutVar RealWorld Entries))
   , wheelThread :: !ThreadId
   }
 
 -- | @new n s@ creates a 'TimerWheel' with __@n@__ buckets and an accuracy of
--- __@s@__ seconds.
-new :: Int -> Fixed E6 -> IO TimerWheel
-new slots (realToFrac -> accuracy) = do
+-- __@s@__ microseconds.
+new :: Int -> Int -> IO TimerWheel
+new slots accuracy = do
   wheel :: UnliftedArray (MutVar RealWorld Entries) <- do
     wheel :: MutableUnliftedArray RealWorld (MutVar RealWorld Entries) <-
       unsafeNewUnliftedArray slots
@@ -113,7 +112,7 @@ new slots (realToFrac -> accuracy) = do
     Supply.new
 
   pure TimerWheel
-    { wheelAccuracy = accuracy
+    { wheelAccuracy = fromIntegral accuracy * 1000
     , wheelSupply = supply
     , wheelEntries = wheel
     , wheelThread = reaperId
@@ -123,7 +122,7 @@ stop :: TimerWheel -> IO ()
 stop wheel =
   killThread (wheelThread wheel)
 
-reaper :: Duration -> UnliftedArray (MutVar RealWorld Entries) -> IO ()
+reaper :: Int -> UnliftedArray (MutVar RealWorld Entries) -> IO ()
 reaper accuracy wheel = do
   manager :: GHC.TimerManager <-
     GHC.getSystemTimerManager
@@ -139,12 +138,12 @@ reaper accuracy wheel = do
       key :: GHC.TimeoutKey <-
         GHC.registerTimeout
           manager
-          (Timestamp.micro accuracy)
+          accuracy
           (putMVar waitVar ())
       takeMVar waitVar `onException` GHC.unregisterTimeout manager key
 
-    now :: Timestamp <-
-      Timestamp.now
+    now :: Word64 <-
+      getMonotonicTimeNSec
 
     -- Figure out which bucket we're in. Usually this will be 'i+1', but maybe
     -- we were scheduled a bit early and ended up in 'i', or maybe running the
@@ -154,7 +153,8 @@ reaper accuracy wheel = do
 
     let j :: Int
         j =
-          fromInteger (now `div'` accuracy) `mod` sizeofUnliftedArray wheel
+          fromIntegral (now `div` (fromIntegral accuracy * 1000))
+            `mod` sizeofUnliftedArray wheel
 
     let is :: [Int]
         is =
@@ -193,15 +193,15 @@ reaper accuracy wheel = do
                       foldMap ignoreSyncException expired)))
     loop manager j
 
-entriesIn :: Duration -> TimerWheel -> IO (MutVar RealWorld Entries)
+entriesIn :: Word64 -> TimerWheel -> IO (MutVar RealWorld Entries)
 entriesIn delay TimerWheel{wheelAccuracy, wheelEntries} = do
-  now :: Duration <-
-    Timestamp.now
-  pure (index ((now+delay) `div'` wheelAccuracy) wheelEntries)
+  now :: Word64 <-
+    getMonotonicTimeNSec
+  pure (index ((now+delay) `div` wheelAccuracy) wheelEntries)
 
 -- | @register n m w@ an action @m@ in wheel @w@ to fire after @n@ seconds.
-register :: Fixed E6 -> IO () -> TimerWheel -> IO (IO Bool)
-register (realToFrac -> delay) action wheel = do
+register :: Int -> IO () -> TimerWheel -> IO (IO Bool)
+register ((*1000) . fromIntegral -> delay) action wheel = do
   newEntryId :: Int <-
     Supply.next (wheelSupply wheel)
 
@@ -223,15 +223,13 @@ register (realToFrac -> delay) action wheel = do
 
 -- | Like 'register', but for when you don't care to 'cancel' or 'reset' the
 -- timer.
-register_ :: Fixed E6 -> IO () -> TimerWheel -> IO ()
+register_ :: Int -> IO () -> TimerWheel -> IO ()
 register_ delay action wheel =
   void (register delay action wheel)
 
-wheelEntryCount :: Duration -> TimerWheel -> Int
+wheelEntryCount :: Word64 -> TimerWheel -> Word64
 wheelEntryCount delay TimerWheel{wheelAccuracy, wheelEntries} =
-  fromInteger
-    (delay `div'`
-      (fromIntegral (sizeofUnliftedArray wheelEntries) * wheelAccuracy))
+  delay `div` (fromIntegral (sizeofUnliftedArray wheelEntries) * wheelAccuracy)
 
 ignoreSyncException :: IO () -> IO ()
 ignoreSyncException action =
@@ -242,6 +240,6 @@ ignoreSyncException action =
       _ ->
         pure ()
 
-index :: PrimUnlifted a => Integer -> UnliftedArray a -> a
+index :: PrimUnlifted a => Word64 -> UnliftedArray a -> a
 index i v =
   indexUnliftedArray v (fromIntegral i `rem` sizeofUnliftedArray v)

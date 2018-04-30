@@ -13,8 +13,9 @@ module Entries.SortedList
 import Entries.List.Common
 
 import Data.Coerce
+import Data.Word (Word64)
 
-insert :: Int -> Int -> IO () -> Entries -> Entries
+insert :: Int -> Word64 -> IO () -> Entries -> Entries
 insert i n m =
   coerce (insert_ (Entry i n m))
 {-# INLINABLE insert #-}

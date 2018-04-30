@@ -11,11 +11,12 @@ module Entries.PSQ
   ) where
 
 import Data.IntPSQ (IntPSQ)
+import Data.Word (Word64)
 
 import qualified Data.IntPSQ as IntPSQ
 
 newtype Entries
-  = Entries (IntPSQ Int (IO ()))
+  = Entries (IntPSQ Word64 (IO ()))
 
 empty :: Entries
 empty =
@@ -32,7 +33,7 @@ size (Entries xs) =
   IntPSQ.size xs
 {-# INLINABLE size #-}
 
-insert :: Int -> Int -> IO () -> Entries -> Entries
+insert :: Int -> Word64 -> IO () -> Entries -> Entries
 insert i n m (Entries xs) =
   Entries (IntPSQ.insert i n m xs)
 {-# INLINABLE insert #-}
@@ -43,7 +44,7 @@ delete i (Entries xs) =
     (entry, xs') ->
       (entry, Entries xs')
  where
-  f :: Maybe (Int, IO ()) -> (Maybe (Entries -> Entries), Maybe (Int, IO ()))
+  f :: Maybe (Word64, IO ()) -> (Maybe (Entries -> Entries), Maybe (Word64, IO ()))
   f = \case
     Nothing ->
       (Nothing, Nothing)
@@ -57,11 +58,11 @@ squam (Entries entries) =
     (expired, alive) ->
       (map f expired, Entries (IntPSQ.unsafeMapMonotonic g alive))
  where
-  f :: (Int, Int, IO ()) -> IO ()
+  f :: (Int, Word64, IO ()) -> IO ()
   f (_, _, m) =
     m
 
-  g :: Int -> Int -> IO () -> (Int, IO ())
+  g :: Int -> Word64 -> IO () -> (Word64, IO ())
   g _ n m =
     (n-1, m)
 {-# INLINABLE squam #-}
