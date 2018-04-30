@@ -52,7 +52,7 @@ library entries-impls
   ghc-options: -Wall
   build-depends:
       base
-    , psqueues
+    , psqueues >= 0.2.7 && < 0.3
   exposed-modules:
     Entries.List
     Entries.PSQ

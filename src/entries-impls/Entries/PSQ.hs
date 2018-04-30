@@ -1,4 +1,5 @@
 {-# language LambdaCase #-}
+{-# language TypeApplications #-}
 
 module Entries.PSQ
   ( Entries
@@ -10,6 +11,7 @@ module Entries.PSQ
   , squam
   ) where
 
+import Data.Coerce
 import Data.IntPSQ (IntPSQ)
 import Data.Word (Word64)
 
@@ -24,33 +26,28 @@ empty =
 {-# INLINABLE empty #-}
 
 null :: Entries -> Bool
-null (Entries xs) =
-  IntPSQ.null xs
+null =
+  coerce (IntPSQ.null @Word64 @(IO ()))
 {-# INLINABLE null #-}
 
 size :: Entries -> Int
-size (Entries xs) =
-  IntPSQ.size xs
+size =
+  coerce (IntPSQ.size @Word64 @(IO ()))
 {-# INLINABLE size #-}
 
 insert :: Int -> Word64 -> IO () -> Entries -> Entries
-insert i n m (Entries xs) =
-  Entries (IntPSQ.insert i n m xs)
+insert i n m =
+  coerce (IntPSQ.insert i n m)
 {-# INLINABLE insert #-}
 
-delete :: Int -> Entries -> (Maybe (Entries -> Entries), Entries)
-delete i (Entries xs) =
-  case IntPSQ.alter f i xs of
-    (entry, xs') ->
-      (entry, Entries xs')
- where
-  f :: Maybe (Word64, IO ()) -> (Maybe (Entries -> Entries), Maybe (Word64, IO ()))
-  f = \case
-    Nothing ->
-      (Nothing, Nothing)
-    Just (n, m)  ->
-      (Just (insert i n m), Nothing)
+delete :: Int -> Entries -> Maybe Entries
+delete =
+  coerce delete_
 {-# INLINABLE delete #-}
+
+delete_ :: Int -> IntPSQ Word64 (IO ()) -> Maybe (IntPSQ Word64 (IO ()))
+delete_ i xs =
+  (\(_, _, ys) -> ys) <$> IntPSQ.deleteView i xs
 
 squam :: Entries -> ([IO ()], Entries)
 squam (Entries entries) =

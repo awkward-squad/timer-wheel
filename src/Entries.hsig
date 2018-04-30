@@ -8,5 +8,5 @@ empty :: Entries
 null :: Entries -> Bool
 size :: Entries -> Int
 insert :: Int -> Word64 -> IO () -> Entries -> Entries
-delete :: Int -> Entries -> (Maybe (Entries -> Entries), Entries)
+delete :: Int -> Entries -> Maybe Entries
 squam :: Entries -> ([IO ()], Entries)

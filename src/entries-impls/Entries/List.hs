@@ -18,29 +18,25 @@ import Data.Word (Word64)
 
 insert :: Int -> Word64 -> IO () -> Entries -> Entries
 insert i n m =
-  coerce (insert_ (Entry i n m))
+  coerce (Entry i n m :)
 {-# INLINABLE insert #-}
 
-insert_ :: Entry -> [Entry] -> [Entry]
-insert_ =
-  (:)
-
-delete :: Int -> Entries -> (Maybe (Entries -> Entries), Entries)
+delete :: Int -> Entries -> Maybe Entries
 delete =
   coerce delete_
 {-# INLINABLE delete #-}
 
-delete_ :: Int -> [Entry] -> (Maybe ([Entry] -> [Entry]), [Entry])
+delete_ :: Int -> [Entry] -> Maybe [Entry]
 delete_ i xs0 =
   go [] xs0
  where
-  go :: [Entry] -> [Entry] -> (Maybe ([Entry] -> [Entry]), [Entry])
+  go :: [Entry] -> [Entry] -> Maybe [Entry]
   go acc = \case
     [] ->
-      (Nothing, acc)
+      Nothing
     x:xs
       | i == entryId x ->
-          (Just (insert_ x), acc ++ xs)
+          Just (acc ++ xs)
       | otherwise ->
           go (x:acc) xs
 

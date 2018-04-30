@@ -34,22 +34,20 @@ insert_ entry@(Entry _ n _) =
       | otherwise ->
           e : loop es
 
-delete :: Int -> Entries -> (Maybe (Entries -> Entries), Entries)
+delete :: Int -> Entries -> Maybe Entries
 delete =
   coerce delete_
 {-# INLINABLE delete #-}
 
-delete_ :: Int -> [Entry] -> (Maybe ([Entry] -> [Entry]), [Entry])
+delete_ :: Int -> [Entry] -> Maybe [Entry]
 delete_ i = \case
   [] ->
-    (Nothing, [])
+    Nothing
   e:es
     | i == entryId e ->
-        (Just (insert_ e), es)
+        Just es
     | otherwise ->
-        case delete_ i es of
-          (f, xs) ->
-            (f, e:xs)
+        (e:) <$> delete_ i es
 
 squam :: Entries -> ([IO ()], Entries)
 squam =

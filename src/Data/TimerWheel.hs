@@ -216,9 +216,9 @@ register ((*1000) . fromIntegral -> delay) action wheel = do
     atomicModifyMutVar' entriesVar
       (\entries ->
         case Entries.delete newEntryId entries of
-          (Nothing, _) ->
+          Nothing ->
             (entries, False)
-          (Just _, entries') ->
+          Just entries' ->
             (entries', True))
 
 -- | Like 'register', but for when you don't care to 'cancel' or 'reset' the
