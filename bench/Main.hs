@@ -3,7 +3,6 @@
 
 import Control.Concurrent.Async (replicateConcurrently_)
 import Control.Monad
-import Data.Fixed
 import Data.Foldable
 import Data.IORef
 import GHC.Event (getSystemTimerManager, registerTimeout, unregisterTimeout)
@@ -44,19 +43,19 @@ main =
 timerWheelMain
   :: Int
   -> Int
-  -> (Int -> Fixed E6 -> IO wheel)
-  -> (Fixed E6 -> IO () -> wheel -> IO (IO Bool))
+  -> (Int -> Int -> IO wheel)
+  -> (Int -> IO () -> wheel -> IO (IO Bool))
   -> IO ()
 timerWheelMain n m new register = do
   wheel <-
-    new (2^(16::Int)) (1/1000000)
+    new (2^(16::Int)) 100000
 
   replicateConcurrently_ n $ do
     timers <-
       replicateM m $ do
-        s:ss <- readIORef doublesRef
-        writeIORef doublesRef ss
-        register (realToFrac s) (pure ()) wheel
+        s:ss <- readIORef intsRef
+        writeIORef intsRef ss
+        register s (pure ()) wheel
     for_ (everyOther timers) id
 
 ghcMain :: Int -> Int -> IO ()
@@ -85,12 +84,7 @@ otherEvery = \case
   _:xs ->
     everyOther xs
 
-doublesRef :: IORef [Double]
-doublesRef =
-  unsafePerformIO (newIORef (randomRs (1, 10) (mkStdGen 1)))
-{-# NOINLINE doublesRef #-}
-
 intsRef :: IORef [Int]
 intsRef =
-  unsafePerformIO (newIORef (randomRs (1, 10000000) (mkStdGen 1)))
+  unsafePerformIO (newIORef (randomRs (1000000, 10000000) (mkStdGen 1)))
 {-# NOINLINE intsRef #-}
