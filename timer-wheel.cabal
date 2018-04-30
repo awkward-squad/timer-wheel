@@ -37,6 +37,9 @@ library entries-impls
   exposed-modules:
     Entries.List
     Entries.PSQ
+    Entries.SortedList
+  other-modules:
+    Entries.List.Common
   default-language: Haskell2010
 
 benchmark bench
@@ -55,6 +58,10 @@ benchmark bench
         (Data.TimerWheel as Data.TimerWheel.List)
       requires
         (Entries as Entries.List)
+    , timer-wheel-indef
+        (Data.TimerWheel as Data.TimerWheel.SortedList)
+      requires
+        (Entries as Entries.SortedList)
     , timer-wheel-indef
         (Data.TimerWheel as Data.TimerWheel.PSQ)
       requires

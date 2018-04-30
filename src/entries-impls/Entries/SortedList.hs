@@ -1,6 +1,6 @@
 {-# language LambdaCase #-}
 
-module Entries.List
+module Entries.SortedList
   ( Entries
   , empty
   , Entries.List.Common.null
@@ -13,7 +13,6 @@ module Entries.List
 import Entries.List.Common
 
 import Data.Coerce
-import Data.List (partition)
 
 insert :: Int -> Int -> IO () -> Entries -> Entries
 insert i n m =
@@ -21,8 +20,18 @@ insert i n m =
 {-# INLINABLE insert #-}
 
 insert_ :: Entry -> [Entry] -> [Entry]
-insert_ =
-  (:)
+insert_ entry@(Entry _ n _) =
+  loop
+ where
+  loop :: [Entry] -> [Entry]
+  loop = \case
+    [] ->
+      [entry]
+    ess@(e:es)
+      | n <= entryCount e ->
+          entry : ess
+      | otherwise ->
+          e : loop es
 
 delete :: Int -> Entries -> (Maybe (Entries -> Entries), Entries)
 delete =
@@ -30,18 +39,16 @@ delete =
 {-# INLINABLE delete #-}
 
 delete_ :: Int -> [Entry] -> (Maybe ([Entry] -> [Entry]), [Entry])
-delete_ i xs0 =
-  go [] xs0
- where
-  go :: [Entry] -> [Entry] -> (Maybe ([Entry] -> [Entry]), [Entry])
-  go acc = \case
-    [] ->
-      (Nothing, acc)
-    x:xs
-      | i == entryId x ->
-          (Just (insert_ x), acc ++ xs)
-      | otherwise ->
-          go (x:acc) xs
+delete_ i = \case
+  [] ->
+    (Nothing, [])
+  e:es
+    | i == entryId e ->
+        (Just (insert_ e), es)
+    | otherwise ->
+        case delete_ i es of
+          (f, xs) ->
+            (f, e:xs)
 
 squam :: Entries -> ([IO ()], Entries)
 squam =
@@ -53,4 +60,4 @@ squam_ =
   (\case
     (expired, alive) ->
       (map entryAction expired, decrement alive))
-  . partition ((== 0) . entryCount)
+  . span ((== 0) . entryCount)
