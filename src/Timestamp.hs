@@ -23,10 +23,6 @@ now = do
     getTime Monotonic
   pure (Timestamp (MkFixed (toNanoSecs time)))
 
-since :: Timestamp -> IO Duration
-since t0 =
-  subtract t0 <$> now
-
 micro :: Duration -> Int
 micro =
   floor . (* 1000000)

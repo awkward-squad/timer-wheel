@@ -1,4 +1,3 @@
-{-# language LambdaCase          #-}
 {-# language MagicHash           #-}
 {-# language NamedFieldPuns      #-}
 {-# language ScopedTypeVariables #-}
@@ -90,8 +89,7 @@ import qualified GHC.Event as GHC
 -- __@2@__ and would expire on the second "lap" through the wheel when the
 -- reaper thread advances to index __@3@__.
 data TimerWheel = TimerWheel
-  { wheelEpoch :: !Timestamp
-  , wheelAccuracy :: !Duration
+  { wheelAccuracy :: !Duration
   , wheelSupply :: !Supply
   , wheelEntries :: !(UnliftedArray (MutVar RealWorld Entries))
   , wheelThread :: !ThreadId
@@ -101,9 +99,6 @@ data TimerWheel = TimerWheel
 -- __@s@__ seconds.
 new :: Int -> Fixed E6 -> IO TimerWheel
 new slots (realToFrac -> accuracy) = do
-  epoch :: Timestamp <-
-    Timestamp.now
-
   wheel :: UnliftedArray (MutVar RealWorld Entries) <- do
     wheel :: MutableUnliftedArray RealWorld (MutVar RealWorld Entries) <-
       unsafeNewUnliftedArray slots
@@ -112,14 +107,13 @@ new slots (realToFrac -> accuracy) = do
     freezeUnliftedArray wheel 0 slots
 
   reaperId :: ThreadId <-
-    forkIO (reaper accuracy epoch wheel)
+    forkIO (reaper accuracy wheel)
 
   supply :: Supply <-
     Supply.new
 
   pure TimerWheel
-    { wheelEpoch = epoch
-    , wheelAccuracy = accuracy
+    { wheelAccuracy = accuracy
     , wheelSupply = supply
     , wheelEntries = wheel
     , wheelThread = reaperId
@@ -129,8 +123,8 @@ stop :: TimerWheel -> IO ()
 stop wheel =
   killThread (wheelThread wheel)
 
-reaper :: Duration -> Timestamp -> UnliftedArray (MutVar RealWorld Entries) -> IO ()
-reaper accuracy epoch wheel = do
+reaper :: Duration -> UnliftedArray (MutVar RealWorld Entries) -> IO ()
+reaper accuracy wheel = do
   manager :: GHC.TimerManager <-
     GHC.getSystemTimerManager
   loop manager 0
@@ -149,8 +143,8 @@ reaper accuracy epoch wheel = do
           (putMVar waitVar ())
       takeMVar waitVar `onException` GHC.unregisterTimeout manager key
 
-    elapsed :: Timestamp <-
-      Timestamp.since epoch
+    now :: Timestamp <-
+      Timestamp.now
 
     -- Figure out which bucket we're in. Usually this will be 'i+1', but maybe
     -- we were scheduled a bit early and ended up in 'i', or maybe running the
@@ -160,7 +154,7 @@ reaper accuracy epoch wheel = do
 
     let j :: Int
         j =
-          fromInteger (elapsed `div'` accuracy) `mod` sizeofUnliftedArray wheel
+          fromInteger (now `div'` accuracy) `mod` sizeofUnliftedArray wheel
 
     let is :: [Int]
         is =
@@ -200,10 +194,10 @@ reaper accuracy epoch wheel = do
     loop manager j
 
 entriesIn :: Duration -> TimerWheel -> IO (MutVar RealWorld Entries)
-entriesIn delay TimerWheel{wheelAccuracy, wheelEpoch, wheelEntries} = do
-  elapsed :: Duration <-
-    Timestamp.since wheelEpoch
-  pure (index ((elapsed+delay) `div'` wheelAccuracy) wheelEntries)
+entriesIn delay TimerWheel{wheelAccuracy, wheelEntries} = do
+  now :: Duration <-
+    Timestamp.now
+  pure (index ((now+delay) `div'` wheelAccuracy) wheelEntries)
 
 -- | @register n m w@ an action @m@ in wheel @w@ to fire after @n@ seconds.
 register :: Fixed E6 -> IO () -> TimerWheel -> IO (IO Bool)

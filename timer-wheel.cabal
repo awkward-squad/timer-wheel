@@ -27,6 +27,28 @@ library timer-wheel-indef
     cpp-options: -DDEBUG
   default-language: Haskell2010
 
+-- Internal library to load into the repl
+library timer-wheel-repl
+  ghc-options: -Wall
+  build-depends:
+      base
+    , entries-impls
+    , timer-wheel-indef
+  mixins:
+      timer-wheel-indef
+        (Data.TimerWheel as Data.TimerWheel.List)
+      requires
+        (Entries as Entries.List)
+    , timer-wheel-indef
+        (Data.TimerWheel as Data.TimerWheel.SortedList)
+      requires
+        (Entries as Entries.SortedList)
+    , timer-wheel-indef
+        (Data.TimerWheel as Data.TimerWheel.PSQ)
+      requires
+        (Entries as Entries.PSQ)
+  default-language: Haskell2010
+
 library entries-impls
   hs-source-dirs: src/entries-impls
   ghc-options: -Wall
