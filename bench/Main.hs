@@ -17,74 +17,89 @@ import qualified Data.TimerWheel.SortedList as TimerWheel.SortedList
 main :: IO ()
 main =
   getArgs >>= \case
-    ["wheel-list", n, m] ->
+    ["wheel-list", which, s, t, n, m] ->
       timerWheelMain
+        (which == "insert")
+        (read s)
+        (read t)
         (read n)
         (read m)
         TimerWheel.List.new
         TimerWheel.List.register
-    ["wheel-sorted-list", n, m] ->
+    ["wheel-sorted-list", which, s, t, n, m] ->
       timerWheelMain
+        (which == "insert")
+        (read s)
+        (read t)
         (read n)
         (read m)
         TimerWheel.SortedList.new
         TimerWheel.SortedList.register
-    ["wheel-psq", n, m] ->
+    ["wheel-psq", which, s, t, n, m] ->
       timerWheelMain
+        (which == "insert")
+        (read s)
+        (read t)
         (read n)
         (read m)
         TimerWheel.PSQ.new
         TimerWheel.PSQ.register
-    ["ghc", n, m] ->
-      ghcMain (read n) (read m)
+    ["ghc", which, n, m] ->
+      ghcMain (which == "insert") (read n) (read m)
     _ ->
-      putStrLn "Expecting args: (wheel-list|wheel-psq|ghc) N M"
+      traverse_ putStrLn
+        [ "Usage:"
+        , ""
+        , "cabal new-run bench -- wheel-list        WHICH BUCKETS ACCURACY THREADS TIMERS"
+        , "cabal new-run bench -- wheel-list        WHICH BUCKETS ACCURACY THREADS TIMERS"
+        , "cabal new-run bench -- wheel-sorted-list WHICH BUCKETS ACCURACY THREADS TIMERS"
+        , "cabal new-run bench -- wheel-sorted-list WHICH BUCKETS ACCURACY THREADS TIMERS"
+        , "cabal new-run bench -- wheel-psq         WHICH BUCKETS ACCURACY THREADS TIMERS"
+        , "cabal new-run bench -- wheel-psq         WHICH BUCKETS ACCURACY THREADS TIMERS"
+        , "cabal new-run bench -- ghc               WHICH                  THREADS TIMERS"
+        , ""
+        , "WHICH    ('insert' or 'remove')  Kind of benchmark to run"
+        , "BUCKETS  (int)                   Number of buckets in the timer wheel"
+        , "ACCURACY (int)                   Accuracy of the timer wheel (microseconds)"
+        , "THREADS  (int)                   How many threads to insert simultaneously"
+        , "TIMERS   (int)                   How many timers each thread should insert"
+        ]
+
 
 timerWheelMain
-  :: Int
+  :: Bool
+  -> Int
+  -> Int
+  -> Int
   -> Int
   -> (Int -> Int -> IO wheel)
   -> (Int -> IO () -> wheel -> IO (IO Bool))
   -> IO ()
-timerWheelMain n m new register = do
+timerWheelMain which s t n m new register = do
   wheel <-
-    new (2^(16::Int)) 100000
+    new s t
 
   replicateConcurrently_ n $ do
     timers <-
       replicateM m $ do
-        s:ss <- readIORef intsRef
-        writeIORef intsRef ss
-        register s (pure ()) wheel
-    for_ (everyOther timers) id
+        x:xs <- readIORef intsRef
+        writeIORef intsRef xs
+        register x (pure ()) wheel
+    unless which (for_ timers id)
 
-ghcMain :: Int -> Int -> IO ()
-ghcMain n m = do
+ghcMain :: Bool -> Int -> Int -> IO ()
+ghcMain which n m = do
   mgr <- getSystemTimerManager
 
   replicateConcurrently_ n $ do
     timers <-
       replicateM m $ do
-        s:ss <- readIORef intsRef
-        writeIORef intsRef ss
-        registerTimeout mgr s (pure ())
-    for_ (everyOther timers) (unregisterTimeout mgr)
-
-everyOther :: [a] -> [a]
-everyOther = \case
-  [] ->
-    []
-  x:xs ->
-    x : otherEvery xs
-
-otherEvery :: [a] -> [a]
-otherEvery = \case
-  [] ->
-    []
-  _:xs ->
-    everyOther xs
+        x:xs <- readIORef intsRef
+        writeIORef intsRef xs
+        registerTimeout mgr x (pure ())
+    unless which (for_ timers (unregisterTimeout mgr))
 
 intsRef :: IORef [Int]
 intsRef =
-  unsafePerformIO (newIORef (randomRs (1000000, 10000000) (mkStdGen 1)))
+  unsafePerformIO (newIORef (randomRs (1*1000*1000, 10*1000*1000) (mkStdGen 1)))
 {-# NOINLINE intsRef #-}
