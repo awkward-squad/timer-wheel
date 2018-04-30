@@ -1,18 +1,15 @@
-{-# language FlexibleContexts #-}
-
 module Supply where
 
 import Data.Atomics.Counter (AtomicCounter, incrCounter, newCounter)
-import Data.Coerce (Coercible, coerce)
 
-newtype Supply a
+newtype Supply
   = Supply AtomicCounter
 
-new :: IO (Supply a)
+new :: IO Supply
 new =
   Supply <$> newCounter 0
 
-next :: Coercible Int a => Supply a -> IO a
+next :: Supply -> IO Int
 next (Supply counter) =
-  coerce <$> incrCounter 1 counter
-{-# INLINABLE next #-}
+  incrCounter 1 counter
+{-# INLINE next #-}

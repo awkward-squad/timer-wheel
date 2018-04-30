@@ -93,7 +93,7 @@ import System.IO.Unsafe
 data TimerWheel = TimerWheel
   { wheelEpoch :: !Timestamp
   , wheelAccuracy :: !Duration
-  , wheelSupply :: !(Supply Int)
+  , wheelSupply :: !Supply
   , wheelEntries :: !(UnliftedArray (TVar Entries))
   , wheelThread :: !ThreadId
   }
@@ -124,7 +124,7 @@ new slots (realToFrac -> accuracy) = do
   reaperId :: ThreadId <-
     forkIO (reaper accuracy epoch wheel)
 
-  supply :: Supply Int <-
+  supply :: Supply <-
     Supply.new
 
   pure TimerWheel
