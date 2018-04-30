@@ -37,7 +37,7 @@ size =
 
 insert :: Int -> Word64 -> IO () -> Entries -> Entries
 insert i n m =
-  coerce (IntPSQ.insert i n m)
+  coerce (IntPSQ.unsafeInsertNew i n m)
 {-# INLINABLE insert #-}
 
 delete :: Int -> Entries -> Maybe Entries
