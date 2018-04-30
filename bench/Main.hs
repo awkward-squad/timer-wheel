@@ -3,6 +3,7 @@
 
 import Control.Concurrent.Async (replicateConcurrently_)
 import Control.Monad
+import Data.Fixed
 import Data.Foldable
 import Data.IORef
 import GHC.Event (getSystemTimerManager, registerTimeout, unregisterTimeout)
@@ -60,7 +61,7 @@ main =
         , ""
         , "WHICH    ('insert' or 'remove')  Kind of benchmark to run"
         , "BUCKETS  (int)                   Number of buckets in the timer wheel"
-        , "ACCURACY (int)                   Accuracy of the timer wheel (microseconds)"
+        , "ACCURACY (float)                 Accuracy of the timer wheel (seconds)"
         , "THREADS  (int)                   How many threads to insert simultaneously"
         , "TIMERS   (int)                   How many timers each thread should insert"
         ]
@@ -69,10 +70,10 @@ main =
 timerWheelMain
   :: Bool
   -> Int
+  -> Fixed E6
   -> Int
   -> Int
-  -> Int
-  -> (Int -> Int -> IO wheel)
+  -> (Int -> Fixed E6 -> IO wheel)
   -> (Int -> IO () -> wheel -> IO (IO Bool))
   -> IO ()
 timerWheelMain which s t n m new register = do

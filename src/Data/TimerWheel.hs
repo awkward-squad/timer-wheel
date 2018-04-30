@@ -23,6 +23,7 @@ import qualified Supply
 import Control.Concurrent
 import Control.Exception
 import Control.Monad
+import Data.Fixed
 import Data.Foldable
 import Data.Primitive.MutVar
 import Data.Primitive.UnliftedArray
@@ -35,7 +36,7 @@ import qualified GHC.Event as GHC
 -- | A 'TimerWheel' is a vector-of-collections-of timers to fire. It is
 -- configured with a /bucket count/ and /accuracy/.
 --
--- An reaper thread is used to step through the timer wheel and fire expired
+-- A reaper thread is used to step through the timer wheel and fire expired
 -- timers.
 --
 -- * The /bucket count/ determines the size of the timer vector.
@@ -95,9 +96,9 @@ data TimerWheel = TimerWheel
   }
 
 -- | @new n s@ creates a 'TimerWheel' with __@n@__ buckets and an accuracy of
--- __@s@__ microseconds.
-new :: Int -> Int -> IO TimerWheel
-new slots accuracy = do
+-- __@s@__ seconds.
+new :: Int -> Fixed E6 -> IO TimerWheel
+new slots (MkFixed (fromInteger -> accuracy)) = do
   wheel :: UnliftedArray (MutVar RealWorld Entries) <- do
     wheel :: MutableUnliftedArray RealWorld (MutVar RealWorld Entries) <-
       unsafeNewUnliftedArray slots
@@ -199,7 +200,9 @@ entriesIn delay TimerWheel{wheelAccuracy, wheelEntries} = do
     getMonotonicTimeNSec
   pure (index ((now+delay) `div` wheelAccuracy) wheelEntries)
 
--- | @register n m w@ an action @m@ in wheel @w@ to fire after @n@ seconds.
+-- | @register n m w@ an action @m@ in wheel @w@ to fire after @n@ microseconds.
+-- Returns an action that, when called, attempts to cancel the timer, and
+-- returns whether or not it was successful.
 register :: Int -> IO () -> TimerWheel -> IO (IO Bool)
 register ((*1000) . fromIntegral -> delay) action wheel = do
   newEntryId :: Int <-
@@ -221,8 +224,7 @@ register ((*1000) . fromIntegral -> delay) action wheel = do
           Just entries' ->
             (entries', True))
 
--- | Like 'register', but for when you don't care to 'cancel' or 'reset' the
--- timer.
+-- | Like 'register', but for when you don't care to cancel the timer.
 register_ :: Int -> IO () -> TimerWheel -> IO ()
 register_ delay action wheel =
   void (register delay action wheel)
