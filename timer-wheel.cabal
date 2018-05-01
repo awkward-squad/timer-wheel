@@ -1,7 +1,27 @@
 name: timer-wheel
 version: 0.1.0
+category: Data
+description:
+  This library provides a simple hashed timer wheel data structure, capable of
+  registering and canceling timers in IO. Its API is similar to that of
+  @TimerManager@ from in "GHC.Event", but scales much better under highly
+  concurrent access patterns.
+synopsis: A simple hashed timer wheel data structure
+author: Mitchell Rosen
+maintainer: Mitchell Rosen <mitchellwrosen@gmail.com>
+homepage: https://github.com/mitchellwrosen/timer-wheel
+bug-reports: https://github.com/mitchellwrosen/timer-wheel/issues
+copyright: (c) 2018, Mitchell Rosen
+license: BSD3
+license-file: LICENSE
 build-type: Simple
-cabal-version: >= 2.0
+cabal-version: 2.0
+tested-with:
+    GHC == 8.4.2
+
+source-repository head
+  type: git
+  location: git://github.com/mitchellwrosen/timer-wheel.git
 
 flag debug
   default: False
@@ -12,7 +32,7 @@ library timer-wheel-indef
   ghc-options: -Wall
   build-depends:
       atomic-primops >= 0.8 && < 0.9
-    , base >= 4.11 && < 4.12
+    , base >= 4.9 && < 4.12
     , ghc-prim >= 0.5 && < 0.6
     , primitive >= 0.6 && < 0.7
   signatures: Entries
@@ -26,26 +46,26 @@ library timer-wheel-indef
   default-language: Haskell2010
 
 -- Internal library to load into the repl
-library timer-wheel-repl
-  ghc-options: -Wall
-  build-depends:
-      base
-    , entries-impls
-    , timer-wheel-indef
-  mixins:
-      timer-wheel-indef
-        (Data.TimerWheel as Data.TimerWheel.List)
-      requires
-        (Entries as Entries.List)
-    , timer-wheel-indef
-        (Data.TimerWheel as Data.TimerWheel.SortedList)
-      requires
-        (Entries as Entries.SortedList)
-    , timer-wheel-indef
-        (Data.TimerWheel as Data.TimerWheel.PSQ)
-      requires
-        (Entries as Entries.PSQ)
-  default-language: Haskell2010
+-- library timer-wheel-repl
+--   ghc-options: -Wall
+--   build-depends:
+--       base
+--     , entries-impls
+--     , timer-wheel-indef
+--   mixins:
+--       timer-wheel-indef
+--         (Data.TimerWheel as Data.TimerWheel.List)
+--       requires
+--         (Entries as Entries.List)
+--     , timer-wheel-indef
+--         (Data.TimerWheel as Data.TimerWheel.SortedList)
+--       requires
+--         (Entries as Entries.SortedList)
+--     , timer-wheel-indef
+--         (Data.TimerWheel as Data.TimerWheel.PSQ)
+--       requires
+--         (Entries as Entries.PSQ)
+--   default-language: Haskell2010
 
 library entries-impls
   hs-source-dirs: src/entries-impls
@@ -65,7 +85,7 @@ benchmark bench
   hs-source-dirs: bench
   main-is: Main.hs
   type: exitcode-stdio-1.0
-  ghc-options: -Wall -O2 -threaded -rtsopts -with-rtsopts=-N
+  ghc-options: -Wall -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       async
     , base
