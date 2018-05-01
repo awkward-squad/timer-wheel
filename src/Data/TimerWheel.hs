@@ -23,7 +23,7 @@ import qualified Supply
 import Control.Concurrent
 import Control.Exception
 import Control.Monad
-import Data.Fixed
+import Data.Fixed (E6, Fixed(MkFixed))
 import Data.Foldable
 import Data.Primitive.MutVar
 import Data.Primitive.UnliftedArray
@@ -34,7 +34,7 @@ import GHC.Prim (RealWorld)
 import qualified GHC.Event as GHC
 
 -- | A 'TimerWheel' is a vector-of-collections-of timers to fire. It is
--- configured with a /bucket count/ and /accuracy/.
+-- configured with a /bucket count/ and /resolution/.
 --
 -- A reaper thread is used to step through the timer wheel and fire expired
 -- timers.
@@ -42,63 +42,66 @@ import qualified GHC.Event as GHC
 -- * The /bucket count/ determines the size of the timer vector.
 --
 --     * A __larger__ bucket count will result in __less__ 'register' contention
---       at each individual bucket and require __more__ memory to store the
---       timer wheel.
---
---     * A __smaller__ bucket count will result in __more__ 'register'
---       contention at each individual bucket and require __less__ memory to
+--       at each individual bucket, __smaller__ buckets (and thus __less__ work
+--       per wakeup by the reaper thread), and will require __more__ memory to
 --       store the timer wheel.
 --
--- * The /accuracy/ determines how often the reaper thread wakes, and thus
---   how accurately timers fire per their registered expiry time.
+--     * A __smaller__ bucket count will result in __more__ 'register'
+--       contention at each individual bucket, __larger__ buckets (and thus
+--       __more__ work per wakeup by the reaper thread), and will require
+--       __less__ memory to store the timer wheel.
 --
---   For example, with an /accuracy/ of __@1s@__, a timer that expires at
+-- * The /resolution/ determines both the duration of time that each bucket
+--   corresponds to, and how often the reaper thread wakes.
+--
+--   For example, with a /resolution/ of __@1s@__, a timer that expires at
 --   __@t = 2.05s@__ will not fire until the reaper thread wakes at
 --   __@t = 3s@__.
 --
---     * A __larger__ accuracy will result in __less__ accurate timers and
---       require __less__ work by the reaper thread.
+--     * A __larger__ resolution will result in __less__ accurate timers,
+--       __larger__ buckets (and thus __more__ work per wakeup by the reaper
+--       thread), and __fewer__ wakeups by the reaper thread.
 --
---     * A __smaller__ accuracy will result in __more__ accurate timers and
---       require __more__ work by the reaper thread.
+--     * A __smaller__ resolution will result in __more__ accurate timers,
+--       __smaller__ buckets (and thus __less__ work per wakeup by the reaper
+--       thread), and __more__ wakeups by the reaper thread.
 --
 -- * The reaper thread has two important properties:
 --
 --     * There is only one, and it fires expired timers synchronously. If your
---       timer actions are very cheap and execute quicky, 'register' them
---       directly. Otherwise, consider registering an action that enqueues the
---       real action to be performed on a queue.
+--       timer actions execute quicky, 'register' them directly. Otherwise,
+--       consider 'register'ing an action that enqueues the real action to be
+--       performed on a queue.
 --
 --     * Synchronous exceptions are completely ignored. If you want to handle
 --       exceptions, bake that logic into the registered action itself.
 --
--- Below is an example of a timer wheel with __@8@__ buckets and an accuracy of
--- __@0.1s@__.
+-- Below is a depiction of a timer wheel with __@5@__ timers inserted across
+-- __@8@__ buckets, and a resolution of __@0.1s@__.
 --
 -- @
 --    0s   .1s   .2s   .3s   .4s   .5s   .6s   .7s   .8s
 --    +-----+-----+-----+-----+-----+-----+-----+-----+
 --    |     |     |     |     |     |     |     |     |
---    +-|---+-|---+-|---+-|---+-|---+-|---+-|---+-|---+
---      |     |     |     |     |     |     |     |
---      |     |     |     |     |     |     |     |
---      ∅     A     ∅     B,C   D     ∅     ∅     E,F,G
+--    +-----+-|---+-----+-|---+-|---+-----+-----+-|---+
+--            |           |     |                 |
+--            A           B,C   D                 E,F,G
 -- @
 --
--- A timer registered to fire at __@t = 1s@__ would be bucketed into index
--- __@2@__ and would expire on the second "lap" through the wheel when the
--- reaper thread advances to index __@3@__.
+-- As an example, a timer registered to fire at __@t = 1s@__ would be bucketed
+-- into index __@2@__ and would expire on the reaper thread's second "lap"
+-- through the wheel.
 data TimerWheel = TimerWheel
-  { wheelAccuracy :: !Word64
+  { wheelResolution :: !Word64
   , wheelSupply :: !Supply
   , wheelEntries :: !(UnliftedArray (MutVar RealWorld Entries))
   , wheelThread :: !ThreadId
   }
 
--- | @new n s@ creates a 'TimerWheel' with __@n@__ buckets and an accuracy of
+-- | @new n s@ creates a 'TimerWheel' with __@n@__ buckets and a resolution of
 -- __@s@__ seconds.
 new :: Int -> Fixed E6 -> IO TimerWheel
-new slots (MkFixed (fromInteger -> accuracy)) = do
+new slots (MkFixed (fromInteger -> resolution)) = do
   wheel :: UnliftedArray (MutVar RealWorld Entries) <- do
     wheel :: MutableUnliftedArray RealWorld (MutVar RealWorld Entries) <-
       unsafeNewUnliftedArray slots
@@ -107,13 +110,13 @@ new slots (MkFixed (fromInteger -> accuracy)) = do
     freezeUnliftedArray wheel 0 slots
 
   reaperId :: ThreadId <-
-    forkIO (reaper accuracy wheel)
+    forkIO (reaper resolution wheel)
 
   supply :: Supply <-
     Supply.new
 
   pure TimerWheel
-    { wheelAccuracy = fromIntegral accuracy * 1000
+    { wheelResolution = fromIntegral resolution * 1000
     , wheelSupply = supply
     , wheelEntries = wheel
     , wheelThread = reaperId
@@ -124,7 +127,7 @@ stop wheel =
   killThread (wheelThread wheel)
 
 reaper :: Int -> UnliftedArray (MutVar RealWorld Entries) -> IO ()
-reaper accuracy wheel = do
+reaper resolution wheel = do
   manager :: GHC.TimerManager <-
     GHC.getSystemTimerManager
   loop manager 0
@@ -137,10 +140,7 @@ reaper accuracy wheel = do
       newEmptyMVar
     mask_ $ do
       key :: GHC.TimeoutKey <-
-        GHC.registerTimeout
-          manager
-          accuracy
-          (putMVar waitVar ())
+        GHC.registerTimeout manager resolution (putMVar waitVar ())
       takeMVar waitVar `onException` GHC.unregisterTimeout manager key
 
     now :: Word64 <-
@@ -154,7 +154,7 @@ reaper accuracy wheel = do
 
     let j :: Int
         j =
-          fromIntegral (now `div` (fromIntegral accuracy * 1000))
+          fromIntegral (now `div` (fromIntegral resolution * 1000))
             `mod` sizeofUnliftedArray wheel
 
     let is :: [Int]
@@ -195,10 +195,10 @@ reaper accuracy wheel = do
     loop manager j
 
 entriesIn :: Word64 -> TimerWheel -> IO (MutVar RealWorld Entries)
-entriesIn delay TimerWheel{wheelAccuracy, wheelEntries} = do
+entriesIn delay TimerWheel{wheelResolution, wheelEntries} = do
   now :: Word64 <-
     getMonotonicTimeNSec
-  pure (index ((now+delay) `div` wheelAccuracy) wheelEntries)
+  pure (index ((now+delay) `div` wheelResolution) wheelEntries)
 
 -- | @register n m w@ an action @m@ in wheel @w@ to fire after @n@ microseconds.
 -- Returns an action that, when called, attempts to cancel the timer, and
@@ -230,8 +230,8 @@ register_ delay action wheel =
   void (register delay action wheel)
 
 wheelEntryCount :: Word64 -> TimerWheel -> Word64
-wheelEntryCount delay TimerWheel{wheelAccuracy, wheelEntries} =
-  delay `div` (fromIntegral (sizeofUnliftedArray wheelEntries) * wheelAccuracy)
+wheelEntryCount delay TimerWheel{wheelResolution, wheelEntries} =
+  delay `div` (fromIntegral (sizeofUnliftedArray wheelEntries) * wheelResolution)
 
 ignoreSyncException :: IO () -> IO ()
 ignoreSyncException action =
