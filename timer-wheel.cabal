@@ -27,6 +27,27 @@ flag debug
   default: False
   manual: True
 
+-- Temporary library just for getting some backpack-ized modules public. Waiting
+-- for the ability to expose multiple public libraries from one package.
+library
+  build-depends:
+      entries-impls
+    , timer-wheel-indef
+  mixins:
+      timer-wheel-indef
+        (Data.TimerWheel as Data.TimerWheel.List)
+      requires
+        (Entries as Entries.List)
+    , timer-wheel-indef
+        (Data.TimerWheel as Data.TimerWheel.SortedList)
+      requires
+        (Entries as Entries.SortedList)
+    , timer-wheel-indef
+        (Data.TimerWheel as Data.TimerWheel.PSQ)
+      requires
+        (Entries as Entries.PSQ)
+  default-language: Haskell2010
+
 library timer-wheel-indef
   hs-source-dirs: src
   ghc-options: -Wall
