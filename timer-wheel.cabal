@@ -2,11 +2,14 @@ name: timer-wheel
 version: 0.1.0
 category: Data
 description:
-  This library provides a simple hashed timer wheel data structure, capable of
-  registering and canceling timers in IO. Its API is similar to that of
-  @TimerManager@ from in "GHC.Event", but scales much better under highly
-  concurrent access patterns.
-synopsis: A simple hashed timer wheel data structure
+  This library provides a timer wheel data structure for
+  .
+  * /O(1)/ registering @IO@ actions to fire after a given amount of time
+  * /O(1)/ canceling registered actions
+  .
+  It is similar to @TimerManager@ from "GHC.Event", but will scale much better,
+  especially under concurrent access patterns.
+synopsis: A timer wheel
 author: Mitchell Rosen
 maintainer: Mitchell Rosen <mitchellwrosen@gmail.com>
 homepage: https://github.com/mitchellwrosen/timer-wheel
@@ -33,6 +36,10 @@ library
   build-depends:
       entries-impls
     , timer-wheel-indef
+  reexported-modules:
+      Data.TimerWheel.List
+    , Data.TimerWheel.PSQ
+    , Data.TimerWheel.SortedList
   mixins:
       timer-wheel-indef
         (Data.TimerWheel as Data.TimerWheel.List)
