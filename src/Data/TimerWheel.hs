@@ -1,5 +1,6 @@
-{-# language MagicHash           #-}
+{-# language LambdaCase          #-}
 {-# language NamedFieldPuns      #-}
+{-# language RecursiveDo         #-}
 {-# language ScopedTypeVariables #-}
 {-# language ViewPatterns        #-}
 
@@ -11,6 +12,7 @@ module Data.TimerWheel
   , new
   , register
   , register_
+  , recurring
   ) where
 
 import Debug (debug)
@@ -69,8 +71,8 @@ import qualified GHC.Event as GHC
 --     * Synchronous exceptions are completely ignored. If you want to handle
 --       exceptions, bake that logic into the registered action itself.
 --
--- Below is a depiction of a timer wheel with __@6@__ timers inserted across
--- __@8@__ spokes, and a resolution of __@0.1s@__.
+-- Below is a depiction of a timer wheel with @6@ timers inserted across @8@
+-- spokes, and a resolution of @0.1s@.
 --
 -- @
 --    0s   .1s   .2s   .3s   .4s   .5s   .6s   .7s   .8s
@@ -192,7 +194,8 @@ reaper resolution wheel = do
 -- after __@n@__ microseconds.
 --
 -- Returns an action that, when called, attempts to cancel the timer, and
--- returns whether or not it was successful.
+-- returns whether or not it was successful (@False@ means the timer has already
+-- fired).
 register :: Int -> IO () -> TimerWheel -> IO (IO Bool)
 register ((*1000) . fromIntegral -> delay) action wheel = do
   newEntryId :: Int <-
@@ -225,6 +228,25 @@ register_ :: Int -> IO () -> TimerWheel -> IO ()
 register_ delay action wheel =
   void (register delay action wheel)
 
+-- | @recurring n m w@ registers an action __@m@__ in timer wheel __@w@__ to
+-- fire every __@n@__ microseconds.
+--
+-- Returns an action that, when called, cancels the recurring timer.
+recurring :: Int -> IO () -> TimerWheel -> IO (IO ())
+recurring delay action wheel = mdo
+  cancel :: IO Bool <-
+    register delay (action' cancelRef) wheel
+  cancelRef :: IORef (IO Bool) <-
+    newIORef cancel
+  pure (untilTrue (join (readIORef cancelRef)))
+ where
+  action' :: IORef (IO Bool) -> IO ()
+  action' cancelRef = do
+    action
+    cancel :: IO Bool <-
+      register delay (action' cancelRef) wheel
+    writeIORef cancelRef cancel
+
 -- | @entriesIn delay wheel@ returns the bucket in @wheel@ that corresponds to
 -- @delay@ nanoseconds from now.
 entriesIn :: Word64 -> TimerWheel -> IO (MutVar RealWorld Entries)
@@ -247,3 +269,12 @@ ignoreSyncException action =
         throwIO ex
       _ ->
         pure ()
+
+-- | Repeat an IO action until it returns 'True'.
+untilTrue :: IO Bool -> IO ()
+untilTrue action =
+  action >>= \case
+    True ->
+      pure ()
+    False ->
+      untilTrue action
