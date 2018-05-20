@@ -80,7 +80,7 @@ import qualified GHC.Event as GHC
 --    |     | A   |     | B,C | D   |     |     | E,F |
 --    +-----+-----+-----+-----+-----+-----+-----+-----+
 -- @
-data TimerWheel = TimerWheel
+data TimerWheel =  TimerWheel
   { wheelResolution :: !Word64
     -- ^ The length of time that each entry corresponds to, in nanoseconds.
   , wheelSupply :: !Supply

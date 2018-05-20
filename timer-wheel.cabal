@@ -1,3 +1,5 @@
+cabal-version: 2.0
+
 name: timer-wheel
 version: 0.1.0
 category: Data
@@ -18,9 +20,7 @@ copyright: (c) 2018, Mitchell Rosen
 license: BSD3
 license-file: LICENSE
 build-type: Simple
-cabal-version: 2.0
-tested-with:
-    GHC == 8.4.2
+tested-with: GHC == 8.4.2
 
 source-repository head
   type: git
@@ -30,16 +30,15 @@ flag debug
   default: False
   manual: True
 
--- Temporary library just for getting some backpack-ized modules public. Waiting
--- for the ability to expose multiple public libraries from one package.
 library
+  ghc-options: -Wall -Wcompat
   build-depends:
       entries-impls
     , timer-wheel-indef
   reexported-modules:
       Data.TimerWheel.List
-    , Data.TimerWheel.PSQ
     , Data.TimerWheel.SortedList
+    , Data.TimerWheel.PSQ
   mixins:
       timer-wheel-indef
         (Data.TimerWheel as Data.TimerWheel.List)
@@ -53,16 +52,17 @@ library
         (Data.TimerWheel as Data.TimerWheel.PSQ)
       requires
         (Entries as Entries.PSQ)
+  default-extensions: NoImplicitPrelude
   default-language: Haskell2010
 
 library timer-wheel-indef
-  hs-source-dirs: src
+  hs-source-dirs: src/timer-wheel-indef
   ghc-options: -Wall
   build-depends:
-      atomic-primops >= 0.8 && < 0.9
-    , base >= 4.9 && < 4.12
-    , ghc-prim >= 0.5 && < 0.6
-    , primitive >= 0.6 && < 0.7
+      atomic-primops ^>= 0.8
+    , base ^>= 4.11
+    , ghc-prim ^>= 0.5
+    , primitive ^>= 0.6
   signatures: Entries
   exposed-modules:
     Data.TimerWheel
@@ -97,10 +97,10 @@ library timer-wheel-indef
 
 library entries-impls
   hs-source-dirs: src/entries-impls
-  ghc-options: -Wall
+  ghc-options: -Wall -Wcompat
   build-depends:
-      base
-    , psqueues >= 0.2.7 && < 0.3
+      base ^>= 4.11
+    , psqueues ^>= 0.2.7
   exposed-modules:
     Entries.List
     Entries.PSQ
