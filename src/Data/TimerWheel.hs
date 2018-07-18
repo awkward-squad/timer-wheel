@@ -1,8 +1,10 @@
 {-# language CPP                 #-}
 {-# language LambdaCase          #-}
+{-# language MagicHash           #-}
 {-# language NamedFieldPuns      #-}
 {-# language RecursiveDo         #-}
 {-# language ScopedTypeVariables #-}
+{-# language UnboxedTuples       #-}
 {-# language ViewPatterns        #-}
 
 {-# options_ghc -funbox-strict-fields #-}
@@ -31,12 +33,14 @@ import Data.IORef
 import Data.Primitive.MutVar
 import Data.Primitive.UnliftedArray
 import Data.Word (Word64)
+import GHC.Base (IO(IO), mkWeak#)
 #if MIN_VERSION_base(4,11,0)
 import GHC.Clock (getMonotonicTimeNSec)
 #else
 import System.Clock (Clock(Monotonic), getTime, toNanoSecs)
 #endif
 import GHC.Prim (RealWorld)
+import GHC.Weak (Weak(Weak), deRefWeak)
 
 import qualified GHC.Event as GHC
 
@@ -97,9 +101,6 @@ data TimerWheel =  TimerWheel
     -- ^ A supply of unique ints.
   , wheelEntries :: !(UnliftedArray (MutVar RealWorld Entries))
     -- ^ The array of collections of timers.
-  , wheelCanary :: !(IORef ())
-    -- ^ An IORef to which we attach a finalizer that kills the reaper thread
-    -- when the wheel is garbage collected.
   }
 
 -- | @new n s@ creates a 'TimerWheel' with __@n@__ spokes and a resolution of
@@ -116,24 +117,29 @@ new slots (MkFixed (fromInteger -> resolution)) = do
   supply :: Supply <-
     Supply.new
 
-  reaperId :: ThreadId <-
-    forkIO (reaper resolution wheel)
+  weakWheel :: Weak (UnliftedArray (MutVar RealWorld Entries)) <-
+    case wheel of
+      UnliftedArray wheel# ->
+        IO $ \s ->
+          case mkWeak# wheel# wheel (\t -> (# t, () #)) s of
+            (# s', w #) ->
+              (# s', Weak w #)
 
-  canary :: IORef () <-
-    newIORef ()
-
-  _ <-
-    mkWeakIORef canary (killThread reaperId)
+  (void . forkIO)
+    (reaper resolution (sizeofUnliftedArray wheel) weakWheel)
 
   pure TimerWheel
     { wheelResolution = fromIntegral resolution * 1000
     , wheelSupply = supply
     , wheelEntries = wheel
-    , wheelCanary = canary
     }
 
-reaper :: Int -> UnliftedArray (MutVar RealWorld Entries) -> IO ()
-reaper resolution wheel = do
+reaper
+  :: Int
+  -> Int
+  -> Weak (UnliftedArray (MutVar RealWorld Entries))
+  -> IO ()
+reaper resolution len weakWheel = do
   manager :: GHC.TimerManager <-
     GHC.getSystemTimerManager
   loop manager 0
@@ -144,6 +150,7 @@ reaper resolution wheel = do
     -- Sleep until the roughly the next bucket.
     waitVar :: MVar () <-
       newEmptyMVar
+
     mask_ $ do
       key :: GHC.TimeoutKey <-
         GHC.registerTimeout manager resolution (putMVar waitVar ())
@@ -152,48 +159,53 @@ reaper resolution wheel = do
     now :: Word64 <-
       getMonotonicTime
 
-    -- Figure out which bucket we're in. Usually this will be 'i+1', but maybe
-    -- we were scheduled a bit early and ended up in 'i', or maybe running the
-    -- entries in bucket 'i-1' took a long time and we slept all the way to
-    -- 'i+2'. In any case, we should run the entries in buckets
-    -- up-to-but-not-including this one, beginning with bucket 'i'.
+    -- De-ref the wheel, and if it's gone, we go too.
+    deRefWeak weakWheel >>= \case
+      Nothing ->
+        pure ()
+      Just wheel -> do
+        -- Figure out which bucket we're in. Usually this will be 'i+1', but
+        -- maybe we were scheduled a bit early and ended up in 'i', or maybe
+        -- running the entries in bucket 'i-1' took a long time and we slept all
+        -- the way to 'i+2'. In any case, we should run the entries in buckets
+        -- up-to-but-not-including this one, beginning with bucket 'i'.
 
-    let
-      j :: Int
-      j =
-        fromIntegral (now `div` (fromIntegral resolution * 1000))
-          `mod` sizeofUnliftedArray wheel
+        let
+          j :: Int
+          j =
+            fromIntegral (now `div` (fromIntegral resolution * 1000))
+              `mod` len
 
-    let
-      is :: [Int]
-      is =
-        if j >= i
-          then
-            [i .. j-1]
-          else
-            [i .. sizeofUnliftedArray wheel - 1] ++ [0 .. j-1]
-
-    -- To actually run the entries in a bucket, partition them into expired
-    -- (count == 0) and alive (count > 0). Run the expired entries and
-    -- decrement the alive entries' counts by 1.
-
-    for_ is $ \k -> do
-      let
-        entriesRef :: MutVar RealWorld Entries
-        entriesRef =
-          indexUnliftedArray wheel k
-
-      join
-        (atomicModifyMutVar' entriesRef
-          (\entries ->
-            if Entries.null entries
+        let
+          is :: [Int]
+          is =
+            if j >= i
               then
-                (entries, pure ())
+                [i .. j-1]
               else
-                case Entries.squam entries of
-                  (expired, alive) ->
-                    (alive, sequence_ expired)))
-    loop manager j
+                [i .. len - 1] ++ [0 .. j-1]
+
+        -- To actually run the entries in a bucket, partition them into expired
+        -- (count == 0) and alive (count > 0). Run the expired entries and
+        -- decrement the alive entries' counts by 1.
+
+        for_ is $ \k -> do
+          let
+            entriesRef :: MutVar RealWorld Entries
+            entriesRef =
+              indexUnliftedArray wheel k
+
+          join
+            (atomicModifyMutVar' entriesRef
+              (\entries ->
+                if Entries.null entries
+                  then
+                    (entries, pure ())
+                  else
+                    case Entries.squam entries of
+                      (expired, alive) ->
+                        (alive, sequence_ expired)))
+        loop manager j
 
 -- | @register n m w@ registers an action __@m@__ in timer wheel __@w@__ to fire
 -- after __@n@__ seconds.
