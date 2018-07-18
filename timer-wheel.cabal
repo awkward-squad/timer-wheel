@@ -27,6 +27,10 @@ license-file: LICENSE
 build-type: Simple
 tested-with: GHC == 8.0.2, GHC == 8.2.2, GHC == 8.4.3
 
+extra-source-files:
+  .travis.yml
+  CHANGELOG.md
+
 source-repository head
   type: git
   location: git://github.com/mitchellwrosen/timer-wheel.git
