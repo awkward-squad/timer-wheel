@@ -9,8 +9,13 @@ description:
   * /O(1)/ registering @IO@ actions to fire after a given amount of time
   * /O(1)/ canceling registered actions
   .
-  It is similar to @TimerManager@ from "GHC.Event", but can scale much better,
-  especially under concurrent access patterns.
+  It is similar to @TimerManager@ from "GHC.Event", but can scale much better
+  under concurrent access patterns.
+  .
+  An unreleased version of this library has a @backpack@-based signature for
+  selecting from a variety of different data structures used internally.
+  However, until @backpack@ has broader support on Hackage, and in Haddocks,
+  etc, I decided to just hard-code something decent (a priority search queue).
 synopsis: A timer wheel
 author: Mitchell Rosen
 maintainer: Mitchell Rosen <mitchellwrosen@gmail.com>
@@ -26,111 +31,35 @@ source-repository head
   type: git
   location: git://github.com/mitchellwrosen/timer-wheel.git
 
-flag debug
-  default: False
-  manual: True
-
 library
-  ghc-options: -Wall -Wcompat
-  build-depends:
-      entries-impls
-    , timer-wheel-indef
-  reexported-modules:
-      Data.TimerWheel.List
-    , Data.TimerWheel.SortedList
-    , Data.TimerWheel.PSQ
-  mixins:
-      timer-wheel-indef
-        (Data.TimerWheel as Data.TimerWheel.List)
-      requires
-        (Entries as Entries.List)
-    , timer-wheel-indef
-        (Data.TimerWheel as Data.TimerWheel.SortedList)
-      requires
-        (Entries as Entries.SortedList)
-    , timer-wheel-indef
-        (Data.TimerWheel as Data.TimerWheel.PSQ)
-      requires
-        (Entries as Entries.PSQ)
-  default-extensions: NoImplicitPrelude
-  default-language: Haskell2010
-
-library timer-wheel-indef
-  hs-source-dirs: src/timer-wheel-indef
-  ghc-options: -Wall
   build-depends:
       atomic-primops ^>= 0.8
     , base ^>= 4.11
     , ghc-prim ^>= 0.5
     , primitive ^>= 0.6
-  signatures: Entries
+    , psqueues ^>= 0.2.7
+  default-language:
+    Haskell2010
   exposed-modules:
     Data.TimerWheel
+  ghc-options:
+    -fprint-expanded-synonyms
+    -fprint-explicit-foralls
+    -fprint-explicit-kinds
+    -fprint-unicode-syntax
+    -Wall
+    -Wcompat
+    -Widentities
+    -Wincomplete-record-updates
+    -Wincomplete-uni-patterns
+    -Wmissing-export-lists
+    -Wmissing-local-signatures
+    -Wnoncanonical-monad-instances
+    -Wnoncanonical-monadfail-instances
+    -Wpartial-fields
+    -Wredundant-constraints
+  hs-source-dirs:
+    src
   other-modules:
-    Debug
+    Entries
     Supply
-  if flag(debug)
-    cpp-options: -DDEBUG
-  default-language: Haskell2010
-
--- Internal library to load into the repl
--- library timer-wheel-repl
---   ghc-options: -Wall
---   build-depends:
---       base
---     , entries-impls
---     , timer-wheel-indef
---   mixins:
---       timer-wheel-indef
---         (Data.TimerWheel as Data.TimerWheel.List)
---       requires
---         (Entries as Entries.List)
---     , timer-wheel-indef
---         (Data.TimerWheel as Data.TimerWheel.SortedList)
---       requires
---         (Entries as Entries.SortedList)
---     , timer-wheel-indef
---         (Data.TimerWheel as Data.TimerWheel.PSQ)
---       requires
---         (Entries as Entries.PSQ)
---   default-language: Haskell2010
-
-library entries-impls
-  hs-source-dirs: src/entries-impls
-  ghc-options: -Wall -Wcompat
-  build-depends:
-      base ^>= 4.11
-    , psqueues ^>= 0.2.7
-  exposed-modules:
-    Entries.List
-    Entries.PSQ
-    Entries.SortedList
-  other-modules:
-    Entries.List.Common
-  default-language: Haskell2010
-
-benchmark bench
-  hs-source-dirs: bench
-  main-is: Main.hs
-  type: exitcode-stdio-1.0
-  ghc-options: -Wall -threaded -rtsopts -with-rtsopts=-N
-  build-depends:
-      async
-    , base
-    , entries-impls
-    , random
-    , timer-wheel-indef
-  mixins:
-      timer-wheel-indef
-        (Data.TimerWheel as Data.TimerWheel.List)
-      requires
-        (Entries as Entries.List)
-    , timer-wheel-indef
-        (Data.TimerWheel as Data.TimerWheel.SortedList)
-      requires
-        (Entries as Entries.SortedList)
-    , timer-wheel-indef
-        (Data.TimerWheel as Data.TimerWheel.PSQ)
-      requires
-        (Entries as Entries.PSQ)
-  default-language: Haskell2010

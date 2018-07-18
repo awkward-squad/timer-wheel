@@ -15,7 +15,6 @@ module Data.TimerWheel
   , recurring
   ) where
 
-import Debug (debug)
 import Entries (Entries)
 import Supply (Supply)
 
@@ -165,8 +164,6 @@ reaper resolution wheel = do
     -- (count == 0) and alive (count > 0). Run the expired entries and
     -- decrement the alive entries' counts by 1.
 
-    debug (putStrLn ("Firing " ++ show (length is) ++ " buckets"))
-
     for_ is $ \k -> do
       let entriesRef :: MutVar RealWorld Entries
           entriesRef =
@@ -181,13 +178,7 @@ reaper resolution wheel = do
               else
                 case Entries.squam entries of
                   (expired, alive) ->
-                    (alive, do
-                      debug $
-                        putStrLn $
-                          "  " ++ show (length expired) ++ " expired, "
-                            ++ show (Entries.size alive) ++ " alive"
-                      -- instance Monoid (IO ()) ;)
-                      foldMap ignoreSyncException expired)))
+                    (alive, foldMap ignoreSyncException expired)))
     loop manager j
 
 -- | @register n m w@ registers an action __@m@__ in timer wheel __@w@__ to fire
