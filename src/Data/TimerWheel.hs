@@ -37,7 +37,7 @@ import qualified GHC.Event as GHC
 
 -- | A 'TimerWheel' is a vector-of-collections-of timers to fire. It is
 -- configured with a /spoke count/ and /resolution/. A timeout thread is spawned
--- to step through the timer wheel and fire expired timers.
+-- to step through the timer wheel and fire expired timers at regular intervals.
 --
 -- * The /spoke count/ determines the size of the timer vector.
 --
@@ -60,15 +60,21 @@ import qualified GHC.Event as GHC
 --       each spoke, __more accurate__ timers, and will require __more wakeups__
 --       by the timeout thread.
 --
--- * The timeout thread has two important properties:
+-- * The timeout thread has three important properties:
 --
 --     * There is only one, and it fires expired timers synchronously. If your
 --       timer actions execute quicky, 'register' them directly. Otherwise,
 --       consider registering an action that enqueues the /real/ action to be
---       performed on a mutable work queue.
+--       performed on a job queue.
 --
---     * Synchronous exceptions are completely ignored. If you want to handle
---       exceptions, bake that logic into the registered action itself.
+--     * Synchronous exceptions thrown by enqueued @IO@ actions will bring the
+--       thread down, and no more timeouts will ever fire. If you want to catch
+--       exceptions and log them, for example, you will have to bake this into
+--       the registered actions yourself.
+--
+--     * The life of the timeout thread is scoped to the life of the timer
+--       wheel. When the timer wheel is garbage collected, the timeout thread
+--       will automatically stop doing work, and die gracefully.
 --
 -- Below is a depiction of a timer wheel with @6@ timers inserted across @8@
 -- spokes, and a resolution of @0.1s@.
@@ -147,48 +153,51 @@ reaper resolution wheel = do
     -- 'i+2'. In any case, we should run the entries in buckets
     -- up-to-but-not-including this one, beginning with bucket 'i'.
 
-    let j :: Int
-        j =
-          fromIntegral (now `div` (fromIntegral resolution * 1000))
-            `mod` sizeofUnliftedArray wheel
+    let
+      j :: Int
+      j =
+        fromIntegral (now `div` (fromIntegral resolution * 1000))
+          `mod` sizeofUnliftedArray wheel
 
-    let is :: [Int]
-        is =
-          if j >= i
-            then
-              [i .. j-1]
-            else
-              [i .. sizeofUnliftedArray wheel - 1] ++ [0 .. j-1]
+    let
+      is :: [Int]
+      is =
+        if j >= i
+          then
+            [i .. j-1]
+          else
+            [i .. sizeofUnliftedArray wheel - 1] ++ [0 .. j-1]
 
     -- To actually run the entries in a bucket, partition them into expired
     -- (count == 0) and alive (count > 0). Run the expired entries and
     -- decrement the alive entries' counts by 1.
 
     for_ is $ \k -> do
-      let entriesRef :: MutVar RealWorld Entries
-          entriesRef =
-            indexUnliftedArray wheel k
+      let
+        entriesRef :: MutVar RealWorld Entries
+        entriesRef =
+          indexUnliftedArray wheel k
 
       join
         (atomicModifyMutVar' entriesRef
           (\entries ->
             if Entries.null entries
               then
-                (entries, pure () :: IO ())
+                (entries, pure ())
               else
                 case Entries.squam entries of
                   (expired, alive) ->
-                    (alive, foldMap ignoreSyncException expired)))
+                    (alive, sequence_ expired)))
     loop manager j
 
 -- | @register n m w@ registers an action __@m@__ in timer wheel __@w@__ to fire
--- after __@n@__ microseconds.
+-- after __@n@__ seconds.
 --
 -- Returns an action that, when called, attempts to cancel the timer, and
 -- returns whether or not it was successful (@False@ means the timer has already
 -- fired).
-register :: Int -> IO () -> TimerWheel -> IO (IO Bool)
-register ((*1000) . fromIntegral -> delay) action wheel = do
+register :: Fixed E6 -> IO () -> TimerWheel -> IO (IO Bool)
+register (MkFixed ((*1000) . fromIntegral -> delay)) action wheel = do
   newEntryId :: Int <-
     Supply.next (wheelSupply wheel)
 
@@ -215,15 +224,15 @@ register ((*1000) . fromIntegral -> delay) action wheel = do
         * wheelResolution wheel)
 
 -- | Like 'register', but for when you don't intend to cancel the timer.
-register_ :: Int -> IO () -> TimerWheel -> IO ()
+register_ :: Fixed E6 -> IO () -> TimerWheel -> IO ()
 register_ delay action wheel =
   void (register delay action wheel)
 
 -- | @recurring n m w@ registers an action __@m@__ in timer wheel __@w@__ to
--- fire every __@n@__ microseconds.
+-- fire every __@n@__ seconds.
 --
 -- Returns an action that, when called, cancels the recurring timer.
-recurring :: Int -> IO () -> TimerWheel -> IO (IO ())
+recurring :: Fixed E6 -> IO () -> TimerWheel -> IO (IO ())
 recurring delay action wheel = mdo
   cancel :: IO Bool <-
     register delay (action' cancelRef) wheel
@@ -250,16 +259,6 @@ entriesIn delay TimerWheel{wheelResolution, wheelEntries} = do
   index i =
     indexUnliftedArray wheelEntries
       (fromIntegral i `rem` sizeofUnliftedArray wheelEntries)
-
--- | Throw away synchronous exceptions thrown by the given IO action.
-ignoreSyncException :: IO () -> IO ()
-ignoreSyncException action =
-  action `catch` \ex ->
-    case fromException ex of
-      Just (SomeAsyncException _) ->
-        throwIO ex
-      _ ->
-        pure ()
 
 -- | Repeat an IO action until it returns 'True'.
 untilTrue :: IO Bool -> IO ()
