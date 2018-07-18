@@ -1,3 +1,4 @@
+{-# language CPP                 #-}
 {-# language LambdaCase          #-}
 {-# language NamedFieldPuns      #-}
 {-# language RecursiveDo         #-}
@@ -30,7 +31,11 @@ import Data.IORef
 import Data.Primitive.MutVar
 import Data.Primitive.UnliftedArray
 import Data.Word (Word64)
+#if MIN_VERSION_base(4,11,0)
 import GHC.Clock (getMonotonicTimeNSec)
+#else
+import System.Clock (Clock(Monotonic), getTime, toNanoSecs)
+#endif
 import GHC.Prim (RealWorld)
 
 import qualified GHC.Event as GHC
@@ -145,7 +150,7 @@ reaper resolution wheel = do
       takeMVar waitVar `onException` GHC.unregisterTimeout manager key
 
     now :: Word64 <-
-      getMonotonicTimeNSec
+      getMonotonicTime
 
     -- Figure out which bucket we're in. Usually this will be 'i+1', but maybe
     -- we were scheduled a bit early and ended up in 'i', or maybe running the
@@ -252,7 +257,7 @@ recurring delay action wheel = mdo
 entriesIn :: Word64 -> TimerWheel -> IO (MutVar RealWorld Entries)
 entriesIn delay TimerWheel{wheelResolution, wheelEntries} = do
   now :: Word64 <-
-    getMonotonicTimeNSec
+    getMonotonicTime
   pure (index ((now+delay) `div` wheelResolution))
  where
   index :: Word64 -> MutVar RealWorld Entries
@@ -268,3 +273,11 @@ untilTrue action =
       pure ()
     False ->
       untilTrue action
+
+getMonotonicTime :: IO Word64
+getMonotonicTime =
+#if MIN_VERSION_base(4,11,0)
+  getMonotonicTimeNSec
+#else
+  fromIntegral . toNanoSecs <$> getTime Monotonic
+#endif
