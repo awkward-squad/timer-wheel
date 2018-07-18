@@ -16,6 +16,8 @@ description:
   selecting from a variety of different data structures used internally.
   However, until @backpack@ has broader support on Hackage, and in Haddocks,
   etc, I decided to just hard-code something decent (a priority search queue).
+  This makes the @O(1)@ claims above a bit of a lie, as these rely on using a
+  linked list data structure internally.
 synopsis: A timer wheel
 author: Mitchell Rosen
 maintainer: Mitchell Rosen <mitchellwrosen@gmail.com>
