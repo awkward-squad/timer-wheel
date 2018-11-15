@@ -1,11 +1,5 @@
-{-# language CPP                 #-}
-{-# language LambdaCase          #-}
-{-# language MagicHash           #-}
-{-# language NamedFieldPuns      #-}
-{-# language RecursiveDo         #-}
-{-# language ScopedTypeVariables #-}
-{-# language UnboxedTuples       #-}
-{-# language ViewPatterns        #-}
+{-# LANGUAGE CPP, LambdaCase, MagicHash, NamedFieldPuns, RecursiveDo,
+             ScopedTypeVariables, UnboxedTuples, ViewPatterns #-}
 
 {-# options_ghc -funbox-strict-fields #-}
 
@@ -19,7 +13,7 @@ module Data.TimerWheel
   ) where
 
 import Entries (Entries)
-import Supply (Supply)
+import Supply  (Supply)
 
 import qualified Entries as Entries
 import qualified Supply
@@ -27,13 +21,13 @@ import qualified Supply
 import Control.Concurrent
 import Control.Exception
 import Control.Monad
-import Data.Fixed (E6, Fixed(MkFixed))
+import Data.Fixed                   (E6, Fixed(MkFixed))
 import Data.Foldable
 import Data.IORef
 import Data.Primitive.MutVar
 import Data.Primitive.UnliftedArray
-import Data.Word (Word64)
-import GHC.Base (IO(IO), mkWeak#)
+import Data.Word                    (Word64)
+import GHC.Base                     (IO(IO), mkWeak#)
 #if MIN_VERSION_base(4,11,0)
 import GHC.Clock (getMonotonicTimeNSec)
 #else
@@ -97,9 +91,9 @@ import qualified GHC.Event as GHC
 data TimerWheel =  TimerWheel
   { wheelResolution :: !Word64
     -- ^ The length of time that each entry corresponds to, in nanoseconds.
-  , wheelSupply :: !Supply
+  , wheelSupply     :: !Supply
     -- ^ A supply of unique ints.
-  , wheelEntries :: !(UnliftedArray (MutVar RealWorld Entries))
+  , wheelEntries    :: !(UnliftedArray (MutVar RealWorld Entries))
     -- ^ The array of collections of timers.
   }
 
