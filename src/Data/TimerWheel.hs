@@ -76,7 +76,7 @@ import System.IO.Unsafe (unsafeInterleaveIO)
 --       each spoke, __more accurate__ timers, and will require __more wakeups__
 --       by the timeout thread.
 --
--- * The timeout thread has three important properties:
+-- * The timeout thread has some important properties:
 --
 --     * There is only one, and it fires expired timers synchronously. If your
 --       timer actions execute quicky, 'register' them directly. Otherwise,
@@ -87,6 +87,13 @@ import System.IO.Unsafe (unsafeInterleaveIO)
 --       thread down, and no more timeouts will ever fire. If you want to catch
 --       exceptions and log them, for example, you will have to bake this into
 --       the registered actions yourself.
+--
+--     * The timeout thread will asynchronously propagate any exception to the
+--       thread that created the timer wheel, wrapped inside a 'TimerWheelDied'
+--       constructor. This is an attempt at immediately notifying your
+--       application when something has gone horribly wrong, so make sure this
+--       exception doesn't get lost (as it would if it merely brings down a
+--       forked thread).
 --
 --     * The life of the timeout thread is scoped to the life of the timer
 --       wheel. When the timer wheel is garbage collected, the timeout thread
@@ -129,6 +136,9 @@ instance Exception InvalidTimerWheelConfig
 --
 -- /Throws./ If @n <= 0@, @n > maxBound \@Int@ or @s@ are @<= 0@, throws an
 -- 'InvalidTimerWheelConfig' exception.
+--
+-- /Throws./ If the timeout thread dies, asynchronously throws 'TimerWheelDied'
+-- to the thread that called 'new'.
 new :: Natural -> Fixed E6 -> IO TimerWheel
 new slots resolution = do
   when (invalidConfig slots resolution)
@@ -190,62 +200,64 @@ reaper
   -> IO ()
 reaper (MkFixed micro) len weakWheel =
   loop 0
- where
-  -- Reaper loop: we haven't yet run the entries at index 'i'.
-  loop :: Int -> IO ()
-  loop i = do
-    -- Sleep until the roughly the next bucket.
-    threadDelay (fromIntegral @Integer (coerce micro))
 
-    now :: Word64 <-
-      getMonotonicTime
+  where
+    -- Reaper loop: we haven't yet run the entries at index 'i'.
+    loop :: Int -> IO ()
+    loop i = do
+      -- Sleep until the roughly the next bucket.
+      threadDelay (fromIntegral @Integer (coerce micro))
 
-    -- De-ref the wheel, and if it's gone, we go too.
-    deRefWeak weakWheel >>= \case
-      Nothing ->
-        pure ()
+      now :: Word64 <-
+        getMonotonicTime
 
-      Just wheel -> do
-        -- Figure out which bucket we're in. Usually this will be 'i+1', but
-        -- maybe we were scheduled a bit early and ended up in 'i', or maybe
-        -- running the entries in bucket 'i-1' took a long time and we slept all
-        -- the way to 'i+2'. In any case, we should run the entries in buckets
-        -- up-to-but-not-including this one, beginning with bucket 'i'.
+      -- De-ref the wheel, and if it's gone, we go too.
+      deRefWeak weakWheel >>= \case
+        Nothing ->
+          pure ()
 
-        let
-          j :: Int
-          j =
-            fromIntegral (now `div` microToNano (MkFixed micro))
-              `mod` len
+        Just wheel -> do
+          -- Figure out which bucket we're in. Usually this will be 'i+1', but
+          -- maybe we were scheduled a bit early and ended up in 'i', or maybe
+          -- running the entries in bucket 'i-1' took a long time and we slept
+          -- all the way to 'i+2'. In any case, we should run the entries in
+          -- buckets up-to-but-not-including this one, beginning with bucket
+          -- 'i'.
 
-        let
-          is :: [Int]
-          is =
-            if j >= i
-              then [i .. j-1]
-              else [i .. len - 1] ++ [0 .. j-1]
-
-        -- To actually run the entries in a bucket, partition them into expired
-        -- (count == 0) and alive (count > 0). Run the expired entries and
-        -- decrement the alive entries' counts by 1.
-
-        for_ is $ \k -> do
           let
-            entriesRef :: MutVar RealWorld Entries
-            entriesRef =
-              indexUnliftedArray wheel k
+            j :: Int
+            j =
+              fromIntegral (now `div` microToNano (MkFixed micro))
+                `mod` len
 
-          join
-            (atomicModifyMutVar' entriesRef
-              (\entries ->
-                if Entries.null entries
-                  then
-                    (entries, pure ())
-                  else
-                    case Entries.partition entries of
-                      (expired, alive) ->
-                        (alive, sequence_ expired)))
-        loop j
+          let
+            is :: [Int]
+            is =
+              if j >= i
+                then [i .. j-1]
+                else [i .. len - 1] ++ [0 .. j-1]
+
+          -- To actually run the entries in a bucket, partition them into
+          -- expired (count == 0) and alive (count > 0). Run the expired entries
+          -- and decrement the alive entries' counts by 1.
+
+          for_ is $ \k -> do
+            let
+              entriesRef :: MutVar RealWorld Entries
+              entriesRef =
+                indexUnliftedArray wheel k
+
+            join
+              (atomicModifyMutVar' entriesRef
+                (\entries ->
+                  if Entries.null entries
+                    then
+                      (entries, pure ())
+                    else
+                      case Entries.partition entries of
+                        (expired, alive) ->
+                          (alive, sequence_ expired)))
+          loop j
 
 -- | @register n m w@ registers an action __@m@__ in timer wheel __@w@__ to fire
 -- after __@n@__ seconds.
@@ -285,12 +297,13 @@ register (microToNano -> delay) action wheel = do
           pure
           result
       pure (Just canceled, canceled)
- where
-  entryCount :: Word64
-  entryCount =
-    delay `div`
-      (fromIntegral (sizeofUnliftedArray (wheelEntries wheel))
-        * wheelResolution wheel)
+
+  where
+    entryCount :: Word64
+    entryCount =
+      delay `div`
+        (fromIntegral (sizeofUnliftedArray (wheelEntries wheel))
+          * wheelResolution wheel)
 
 -- | Like 'register', but for when you don't intend to cancel the timer.
 register_ :: Fixed E6 -> IO () -> TimerWheel -> IO ()
@@ -306,12 +319,13 @@ recurring delay action wheel = mdo
   cancel <- register delay (action' cancelRef) wheel
   cancelRef <- newIORef cancel
   pure (untilTrue (join (readIORef cancelRef)))
- where
-  action' :: IORef (IO Bool) -> IO ()
-  action' cancelRef = do
-    action
-    cancel <- register delay (action' cancelRef) wheel
-    writeIORef cancelRef cancel
+
+  where
+    action' :: IORef (IO Bool) -> IO ()
+    action' cancelRef = do
+      action
+      cancel <- register delay (action' cancelRef) wheel
+      writeIORef cancelRef cancel
 
 -- @entriesIn delay wheel@ returns the bucket in @wheel@ that corresponds to
 -- @delay@ nanoseconds from now.
@@ -319,11 +333,12 @@ entriesIn :: Word64 -> TimerWheel -> IO (MutVar RealWorld Entries)
 entriesIn delay TimerWheel{wheelResolution, wheelEntries} = do
   now <- getMonotonicTime
   pure (index ((now+delay) `div` wheelResolution))
- where
-  index :: Word64 -> MutVar RealWorld Entries
-  index i =
-    indexUnliftedArray wheelEntries
-      (fromIntegral i `rem` sizeofUnliftedArray wheelEntries)
+
+  where
+    index :: Word64 -> MutVar RealWorld Entries
+    index i =
+      indexUnliftedArray wheelEntries
+        (fromIntegral i `rem` sizeofUnliftedArray wheelEntries)
 
 -- Repeat an IO action until it returns 'True'.
 untilTrue :: IO Bool -> IO ()
