@@ -8,7 +8,7 @@ module Entries
   , size
   , insert
   , delete
-  , squam
+  , partition
   ) where
 
 import Data.Coerce
@@ -55,8 +55,8 @@ delete_ i xs =
   (\(_, _, ys) -> ys) <$> IntPSQ.deleteView i xs
 
 -- | Extract expired timers.
-squam :: Entries -> ([IO ()], Entries)
-squam (Entries entries) =
+partition :: Entries -> ([IO ()], Entries)
+partition (Entries entries) =
   case IntPSQ.atMostView 0 entries of
     (expired, alive) ->
       (map f expired, Entries (IntPSQ.unsafeMapMonotonic g alive))
@@ -68,4 +68,4 @@ squam (Entries entries) =
   g :: Int -> Word64 -> IO () -> (Word64, IO ())
   g _ n m =
     (n-1, m)
-{-# INLINABLE squam #-}
+{-# INLINABLE partition #-}

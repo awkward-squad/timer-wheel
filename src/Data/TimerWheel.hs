@@ -1,5 +1,6 @@
 {-# LANGUAGE CPP, LambdaCase, MagicHash, NamedFieldPuns, RecursiveDo,
-             ScopedTypeVariables, UnboxedTuples, ViewPatterns #-}
+             ScopedTypeVariables, TypeApplications, UnboxedTuples,
+             ViewPatterns #-}
 
 {-# options_ghc -funbox-strict-fields #-}
 
@@ -10,6 +11,8 @@ module Data.TimerWheel
   , register
   , register_
   , recurring
+  , InvalidTimerWheelConfig(..)
+  , TimerWheelDied(..)
   ) where
 
 import Entries (Entries)
@@ -18,14 +21,23 @@ import Supply  (Supply)
 import qualified Entries as Entries
 import qualified Supply
 
-import Control.Concurrent
-import Control.Exception
-import Control.Monad
+import Control.Concurrent           (forkIOWithUnmask, myThreadId, threadDelay,
+                                     throwTo)
+import Control.Exception            (Exception(fromException, toException),
+                                     SomeException, asyncExceptionFromException,
+                                     asyncExceptionToException, catch, mask_,
+                                     throwIO)
+import Control.Monad                (join, void, when)
+import Data.Coerce                  (coerce)
 import Data.Fixed                   (E6, Fixed(MkFixed))
-import Data.Foldable
-import Data.IORef
-import Data.Primitive.MutVar
-import Data.Primitive.UnliftedArray
+import Data.Foldable                (for_)
+import Data.IORef                   (IORef, newIORef, readIORef, writeIORef)
+import Data.Primitive.MutVar        (MutVar, atomicModifyMutVar', newMutVar)
+import Data.Primitive.UnliftedArray (MutableUnliftedArray,
+                                     UnliftedArray(UnliftedArray),
+                                     freezeUnliftedArray, indexUnliftedArray,
+                                     sizeofUnliftedArray,
+                                     unsafeNewUnliftedArray, writeUnliftedArray)
 import Data.Word                    (Word64)
 import GHC.Base                     (IO(IO), mkWeak#)
 #if MIN_VERSION_base(4,11,0)
@@ -33,10 +45,9 @@ import GHC.Clock (getMonotonicTimeNSec)
 #else
 import System.Clock (Clock(Monotonic), getTime, toNanoSecs)
 #endif
-import GHC.Prim (RealWorld)
-import GHC.Weak (Weak(Weak), deRefWeak)
-
-import qualified GHC.Event as GHC
+import GHC.Prim        (RealWorld)
+import GHC.Weak        (Weak(Weak), deRefWeak)
+import Numeric.Natural (Natural)
 
 -- | A 'TimerWheel' is a vector-of-collections-of timers to fire. It is
 -- configured with a /spoke count/ and /resolution/. A timeout thread is spawned
@@ -97,58 +108,92 @@ data TimerWheel =  TimerWheel
     -- ^ The array of collections of timers.
   }
 
+newtype TimerWheelDied
+  = TimerWheelDied SomeException
+  deriving (Show)
+
+instance Exception TimerWheelDied where
+  toException = asyncExceptionToException
+  fromException = asyncExceptionFromException
+
+data InvalidTimerWheelConfig
+  = InvalidTimerWheelConfig !Natural !(Fixed E6)
+  deriving (Show)
+
+instance Exception InvalidTimerWheelConfig
+
 -- | @new n s@ creates a 'TimerWheel' with __@n@__ spokes and a resolution of
 -- __@s@__ seconds.
-new :: Int -> Fixed E6 -> IO TimerWheel
-new slots (MkFixed (fromInteger -> resolution)) = do
-  wheel :: UnliftedArray (MutVar RealWorld Entries) <- do
-    wheel :: MutableUnliftedArray RealWorld (MutVar RealWorld Entries) <-
-      unsafeNewUnliftedArray slots
-    for_ [0..slots-1] $ \i ->
-      writeUnliftedArray wheel i =<< newMutVar Entries.empty
-    freezeUnliftedArray wheel 0 slots
+--
+-- /Throws./ If @n <= 0@, @n > maxBound \@Int@ or @s@ are @<= 0@, throws an
+-- 'InvalidTimerWheelConfig' exception.
+new :: Natural -> Fixed E6 -> IO TimerWheel
+new slots resolution = do
+  when (invalidConfig slots resolution)
+    (throwIO (InvalidTimerWheelConfig slots resolution))
+
+  wheel :: UnliftedArray (MutVar RealWorld Entries) <-
+    newWheel slots
 
   supply :: Supply <-
     Supply.new
 
   weakWheel :: Weak (UnliftedArray (MutVar RealWorld Entries)) <-
-    case wheel of
-      UnliftedArray wheel# ->
-        IO $ \s ->
-          case mkWeak# wheel# wheel (\t -> (# t, () #)) s of
-            (# s', w #) ->
-              (# s', Weak w #)
+    weakUnliftedArray wheel
 
-  (void . forkIO)
-    (reaper resolution (sizeofUnliftedArray wheel) weakWheel)
+  do
+    thread <- myThreadId
+    void $ mask_ $ forkIOWithUnmask $ \unmask ->
+      unmask (reaper resolution (sizeofUnliftedArray wheel) weakWheel)
+        `catch` \e -> throwTo thread (TimerWheelDied e)
 
   pure TimerWheel
-    { wheelResolution = fromIntegral resolution * 1000
+    { wheelResolution = microToNano resolution
     , wheelSupply = supply
     , wheelEntries = wheel
     }
 
+invalidConfig :: Natural -> Fixed E6 -> Bool
+invalidConfig slots resolution =
+  or
+    [ slots <= 0
+    , slots > fromIntegral (maxBound :: Int)
+    , resolution <= 0
+    ]
+
+-- Initialize a wheel with the given number of slots.
+--
+-- Precondition: 0 < slots <= maxBound @Int
+newWheel :: Natural -> IO (UnliftedArray (MutVar RealWorld Entries))
+newWheel (fromIntegral -> slots) = do
+  wheel :: MutableUnliftedArray RealWorld (MutVar RealWorld Entries) <-
+    unsafeNewUnliftedArray slots
+  for_ [0..slots-1] $ \i ->
+    writeUnliftedArray wheel i =<< newMutVar Entries.empty
+  freezeUnliftedArray wheel 0 slots
+
+weakUnliftedArray :: UnliftedArray a -> IO (Weak (UnliftedArray a))
+weakUnliftedArray array =
+  case array of
+    UnliftedArray array# ->
+      IO $ \s ->
+        case mkWeak# array# array (\t -> (# t, () #)) s of
+          (# s', x #) ->
+            (# s', Weak x #)
+
 reaper
-  :: Int
+  :: Fixed E6
   -> Int
   -> Weak (UnliftedArray (MutVar RealWorld Entries))
   -> IO ()
-reaper resolution len weakWheel = do
-  manager :: GHC.TimerManager <-
-    GHC.getSystemTimerManager
-  loop manager 0
+reaper (MkFixed micro) len weakWheel =
+  loop 0
  where
   -- Reaper loop: we haven't yet run the entries at index 'i'.
-  loop :: GHC.TimerManager -> Int -> IO ()
-  loop manager i = do
+  loop :: Int -> IO ()
+  loop i = do
     -- Sleep until the roughly the next bucket.
-    waitVar :: MVar () <-
-      newEmptyMVar
-
-    mask_ $ do
-      key :: GHC.TimeoutKey <-
-        GHC.registerTimeout manager resolution (putMVar waitVar ())
-      takeMVar waitVar `onException` GHC.unregisterTimeout manager key
+    threadDelay (fromIntegral @Integer (coerce micro))
 
     now :: Word64 <-
       getMonotonicTime
@@ -157,6 +202,7 @@ reaper resolution len weakWheel = do
     deRefWeak weakWheel >>= \case
       Nothing ->
         pure ()
+
       Just wheel -> do
         -- Figure out which bucket we're in. Usually this will be 'i+1', but
         -- maybe we were scheduled a bit early and ended up in 'i', or maybe
@@ -167,17 +213,15 @@ reaper resolution len weakWheel = do
         let
           j :: Int
           j =
-            fromIntegral (now `div` (fromIntegral resolution * 1000))
+            fromIntegral (now `div` microToNano (MkFixed micro))
               `mod` len
 
         let
           is :: [Int]
           is =
             if j >= i
-              then
-                [i .. j-1]
-              else
-                [i .. len - 1] ++ [0 .. j-1]
+              then [i .. j-1]
+              else [i .. len - 1] ++ [0 .. j-1]
 
         -- To actually run the entries in a bucket, partition them into expired
         -- (count == 0) and alive (count > 0). Run the expired entries and
@@ -196,10 +240,10 @@ reaper resolution len weakWheel = do
                   then
                     (entries, pure ())
                   else
-                    case Entries.squam entries of
+                    case Entries.partition entries of
                       (expired, alive) ->
                         (alive, sequence_ expired)))
-        loop manager j
+        loop j
 
 -- | @register n m w@ registers an action __@m@__ in timer wheel __@w@__ to fire
 -- after __@n@__ seconds.
@@ -208,7 +252,7 @@ reaper resolution len weakWheel = do
 -- returns whether or not it was successful (@False@ means the timer has already
 -- fired).
 register :: Fixed E6 -> IO () -> TimerWheel -> IO (IO Bool)
-register (MkFixed ((*1000) . fromIntegral -> delay)) action wheel = do
+register (microToNano -> delay) action wheel = do
   newEntryId :: Int <-
     Supply.next (wheelSupply wheel)
 
@@ -279,6 +323,10 @@ untilTrue action =
       pure ()
     False ->
       untilTrue action
+
+microToNano :: Fixed E6 -> Word64
+microToNano (MkFixed micro) =
+  fromIntegral micro * 1000
 
 getMonotonicTime :: IO Word64
 getMonotonicTime =
