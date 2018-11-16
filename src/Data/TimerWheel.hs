@@ -23,6 +23,7 @@ import qualified Supply
 
 import Control.Concurrent           (forkIOWithUnmask, myThreadId, threadDelay,
                                      throwTo)
+import Control.Concurrent.MVar
 import Control.Exception            (Exception(fromException, toException),
                                      SomeException, asyncExceptionFromException,
                                      asyncExceptionToException, catch, mask_,
@@ -45,9 +46,10 @@ import GHC.Clock (getMonotonicTimeNSec)
 #else
 import System.Clock (Clock(Monotonic), getTime, toNanoSecs)
 #endif
-import GHC.Prim        (RealWorld)
-import GHC.Weak        (Weak(Weak), deRefWeak)
-import Numeric.Natural (Natural)
+import GHC.Prim         (RealWorld)
+import GHC.Weak         (Weak(Weak), deRefWeak)
+import Numeric.Natural  (Natural)
+import System.IO.Unsafe (unsafeInterleaveIO)
 
 -- | A 'TimerWheel' is a vector-of-collections-of timers to fire. It is
 -- configured with a /spoke count/ and /resolution/. A timeout thread is spawned
@@ -251,6 +253,9 @@ reaper (MkFixed micro) len weakWheel =
 -- Returns an action that, when called, attempts to cancel the timer, and
 -- returns whether or not it was successful (@False@ means the timer has already
 -- fired).
+--
+-- Subsequent calls to the cancel action have no effect, and continue to return
+-- whatever the first result was.
 register :: Fixed E6 -> IO () -> TimerWheel -> IO (IO Bool)
 register (microToNano -> delay) action wheel = do
   newEntryId :: Int <-
@@ -263,14 +268,23 @@ register (microToNano -> delay) action wheel = do
     (\entries ->
       (Entries.insert newEntryId entryCount action entries, ()))
 
+  canceledVar :: MVar (Maybe Bool) <-
+    unsafeInterleaveIO (newMVar Nothing)
+
   pure $ do
-    atomicModifyMutVar' entriesVar
-      (\entries ->
-        case Entries.delete newEntryId entries of
-          Nothing ->
-            (entries, False)
-          Just entries' ->
-            (entries', True))
+    modifyMVar canceledVar $ \result -> do
+      canceled <-
+        maybe
+          (atomicModifyMutVar' entriesVar
+            (\entries ->
+              case Entries.delete newEntryId entries of
+                Nothing ->
+                  (entries, False)
+                Just entries' ->
+                  (entries', True)))
+          pure
+          result
+      pure (Just canceled, canceled)
  where
   entryCount :: Word64
   entryCount =
@@ -289,25 +303,21 @@ register_ delay action wheel =
 -- Returns an action that, when called, cancels the recurring timer.
 recurring :: Fixed E6 -> IO () -> TimerWheel -> IO (IO ())
 recurring delay action wheel = mdo
-  cancel :: IO Bool <-
-    register delay (action' cancelRef) wheel
-  cancelRef :: IORef (IO Bool) <-
-    newIORef cancel
+  cancel <- register delay (action' cancelRef) wheel
+  cancelRef <- newIORef cancel
   pure (untilTrue (join (readIORef cancelRef)))
  where
   action' :: IORef (IO Bool) -> IO ()
   action' cancelRef = do
     action
-    cancel :: IO Bool <-
-      register delay (action' cancelRef) wheel
+    cancel <- register delay (action' cancelRef) wheel
     writeIORef cancelRef cancel
 
--- | @entriesIn delay wheel@ returns the bucket in @wheel@ that corresponds to
+-- @entriesIn delay wheel@ returns the bucket in @wheel@ that corresponds to
 -- @delay@ nanoseconds from now.
 entriesIn :: Word64 -> TimerWheel -> IO (MutVar RealWorld Entries)
 entriesIn delay TimerWheel{wheelResolution, wheelEntries} = do
-  now :: Word64 <-
-    getMonotonicTime
+  now <- getMonotonicTime
   pure (index ((now+delay) `div` wheelResolution))
  where
   index :: Word64 -> MutVar RealWorld Entries
@@ -315,14 +325,12 @@ entriesIn delay TimerWheel{wheelResolution, wheelEntries} = do
     indexUnliftedArray wheelEntries
       (fromIntegral i `rem` sizeofUnliftedArray wheelEntries)
 
--- | Repeat an IO action until it returns 'True'.
+-- Repeat an IO action until it returns 'True'.
 untilTrue :: IO Bool -> IO ()
 untilTrue action =
   action >>= \case
-    True ->
-      pure ()
-    False ->
-      untilTrue action
+    True -> pure ()
+    False -> untilTrue action
 
 microToNano :: Fixed E6 -> Word64
 microToNano (MkFixed micro) =
