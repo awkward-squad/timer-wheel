@@ -13,11 +13,12 @@ main = do
   do
     putStrLn "timer wheel runs scheduled actions"
     ref <- newIORef False
-    wheel <- new Config { spokes = 8, resolution = 0.25 }
+    wheel <- create Config { spokes = 8, resolution = 0.25 }
     register_ wheel (writeIORef ref True) 0.5
     performGC
     sleep 0.85
     readIORef ref `is` True
+    destroy wheel
 
   -- do
   --   putStrLn "timeout thread stops working when wheel is garbage collected"

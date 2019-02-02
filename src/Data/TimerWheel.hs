@@ -3,7 +3,8 @@
 module Data.TimerWheel
   ( -- * Timer wheel
     TimerWheel
-  , new
+  , create
+  , destroy
   , Config(..)
   , register
   , register_
@@ -21,12 +22,12 @@ import qualified Entries
 import qualified Supply
 import qualified Wheel
 
-import Control.Concurrent      (forkIOWithUnmask, myThreadId, throwTo)
+import Control.Concurrent      (ThreadId, forkIOWithUnmask, killThread,
+                                myThreadId, throwTo)
 import Control.Concurrent.MVar
 import Control.Exception       (Exception(fromException, toException),
                                 SomeException, asyncExceptionFromException,
-                                asyncExceptionToException, catch, mask_,
-                                throwIO)
+                                asyncExceptionToException, catch, throwIO)
 import Control.Monad           (join, void, when)
 import Data.Coerce             (coerce)
 import Data.Fixed              (E6, Fixed(MkFixed))
@@ -103,12 +104,13 @@ data TimerWheel =  TimerWheel
     -- ^ A supply of unique ints.
   , wheelWheel :: !Wheel
     -- ^ The array of collections of timers.
+  , wheelThread :: !ThreadId
   }
 
 data Config
   = Config
-  { spokes :: !Natural
-  , resolution :: !(Fixed E6)
+  { spokes :: !Natural -- ^ Spoke count.
+  , resolution :: !(Fixed E6) -- ^ Resolution, in seconds.
   } deriving stock (Generic, Show)
 
 newtype TimerWheelDied
@@ -125,37 +127,42 @@ data InvalidTimerWheelConfig
 
 instance Exception InvalidTimerWheelConfig
 
--- | @new n s@ creates a 'TimerWheel' with __@n@__ spokes and a resolution of
--- __@s@__ seconds.
+-- | Create a timer wheel.
 --
--- /Throws./ If @n == 0@, @n > maxBound \@Int@ or @s <= 0@, throws an
--- 'InvalidTimerWheelConfig' exception.
+-- /Throws./ If @spokes == 0@, @spokes > maxBound \@Int@ or @resolution <= 0@,
+-- throws an 'InvalidTimerWheelConfig' exception.
 --
 -- /Throws./ If the timeout thread dies, asynchronously throws 'TimerWheelDied'
 -- to the thread that called 'new'.
-new :: Config -> IO TimerWheel
-new config@(Config { spokes, resolution }) = do
+create :: Config -> IO TimerWheel
+create config@(Config { spokes, resolution }) = do
   when (invalidConfig config)
     (throwIO (InvalidTimerWheelConfig config))
 
   wheel :: Wheel <-
-    Wheel.new
+    Wheel.create
       (fromIntegral spokes)
       (fromIntegral (coerce resolution :: Integer))
 
   supply :: Supply <-
     Supply.new
 
-  do
-    thread <- myThreadId
-    void $ mask_ $ forkIOWithUnmask $ \unmask ->
+  thread <- myThreadId
+
+  reaperThread <-
+    forkIOWithUnmask $ \unmask ->
       unmask (Wheel.reap wheel)
         `catch` \e -> throwTo thread (TimerWheelDied e)
 
   pure TimerWheel
     { wheelSupply = supply
     , wheelWheel = wheel
+    , wheelThread = reaperThread
     }
+
+destroy :: TimerWheel -> IO ()
+destroy wheel =
+  killThread (wheelThread wheel)
 
 invalidConfig :: Config -> Bool
 invalidConfig Config { spokes, resolution } =

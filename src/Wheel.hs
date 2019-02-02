@@ -2,7 +2,7 @@
 
 module Wheel
   ( Wheel
-  , new
+  , create
   , lenMicros
   , bucket
   , reap
@@ -34,11 +34,11 @@ data Wheel
   , resolution :: !Word64 -- micros
   }
 
-new ::
+create ::
      Int
   -> Word64 -- micros
   -> IO Wheel
-new spokes resolution = do
+create spokes resolution = do
   mbuckets :: MutableUnliftedArray RealWorld (IORef Entries) <-
     unsafeNewUnliftedArray spokes
 
