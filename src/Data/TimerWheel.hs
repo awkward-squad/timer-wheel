@@ -172,12 +172,20 @@ invalidConfig Config { spokes, resolution } =
 --
 -- Subsequent calls to the cancel action have no effect, and continue to return
 -- whatever the first result was.
-register :: TimerWheel -> IO () -> Fixed E6 -> IO (IO Bool)
+register ::
+     TimerWheel -- ^
+  -> IO () -- ^ Action
+  -> Fixed E6 -- ^ Delay, in seconds
+  -> IO (IO Bool)
 register wheel action (MkFixed (fromIntegral -> delay)) =
   _register wheel action delay
 
 -- | Like 'register', but for when you don't intend to cancel the timer.
-register_ :: TimerWheel -> IO () -> Fixed E6 -> IO ()
+register_ ::
+     TimerWheel -- ^
+  -> IO () -- ^ Action
+  -> Fixed E6 -- ^ Delay, in seconds
+  -> IO ()
 register_ wheel action delay =
   void (register wheel action delay)
 
@@ -194,7 +202,11 @@ _register_ wheel action delay =
 -- wheel __@wheel@__ to fire every __@delay@__ seconds.
 --
 -- Returns an action that, when called, cancels the recurring timer.
-recurring :: TimerWheel -> IO () -> Fixed E6 -> IO (IO ())
+recurring ::
+     TimerWheel
+  -> IO () -- ^ Action
+  -> Fixed E6 -- ^ Delay, in seconds
+  -> IO (IO ())
 recurring wheel action (MkFixed (fromIntegral -> delay)) = mdo
   let
     doAction :: IO ()
@@ -227,7 +239,11 @@ recurring wheel action (MkFixed (fromIntegral -> delay)) = mdo
   pure (untilTrue (join (readIORef cancelRef)))
 
 -- | Like 'recurring', but for when you don't intend to cancel the timer.
-recurring_ :: TimerWheel -> IO () -> Fixed E6 -> IO ()
+recurring_ ::
+     TimerWheel
+  -> IO () -- ^ Action
+  -> Fixed E6 -- ^ Delay, in seconds
+  -> IO ()
 recurring_ wheel action (MkFixed (fromIntegral -> delay)) =
   _register_ wheel doAction delay
 
