@@ -1,8 +1,7 @@
 cabal-version: 2.0
 
 name: timer-wheel
-version: 0.1.0
-x-revision: 1
+version: 0.2.0
 category: Data
 description:
   This library provides a timer wheel data structure for
@@ -32,7 +31,7 @@ tested-with:
     GHC == 8.0.2
   , GHC == 8.2.2
   , GHC == 8.4.4
-  , GHC == 8.6.2
+  , GHC == 8.6.3
 
 extra-source-files:
   .travis.yml
@@ -55,7 +54,7 @@ library
 
   default-extensions:
     DeriveGeneric
-    DerivingStrategies
+    GeneralizedNewtypeDeriving
     LambdaCase
     NamedFieldPuns
     RecursiveDo
@@ -95,12 +94,12 @@ library
   other-modules:
     Entries
     Supply
-    Utils
     Wheel
 
 test-suite tests
   build-depends:
     base,
+    random,
     timer-wheel
 
   default-language:

@@ -9,41 +9,35 @@ module Data.TimerWheel
   , register
   , register_
   , recurring
+  , recurring_
   , InvalidTimerWheelConfig(..)
   , TimerWheelDied(..)
   ) where
 
-import Entries (Entries)
-import Supply  (Supply)
-import Utils
-import Wheel   (Wheel)
+import Supply (Supply)
+import Wheel  (Wheel)
 
-import qualified Entries
 import qualified Supply
 import qualified Wheel
 
-import Control.Concurrent      (ThreadId, forkIOWithUnmask, killThread,
-                                myThreadId, throwTo)
-import Control.Concurrent.MVar
-import Control.Exception       (Exception(fromException, toException),
-                                SomeException, asyncExceptionFromException,
-                                asyncExceptionToException, catch, throwIO)
-import Control.Monad           (join, void, when)
-import Data.Coerce             (coerce)
-import Data.Fixed              (E6, Fixed(MkFixed))
-import Data.IORef              (IORef, newIORef, readIORef, writeIORef)
-import Data.Primitive.MutVar   (MutVar, atomicModifyMutVar')
-import Data.Word               (Word64)
--- import GHC.Base                     (IO(IO), mkWeak#)
-import GHC.Generics (Generic)
-import GHC.Prim     (RealWorld)
--- import GHC.Weak         (Weak(Weak), deRefWeak)
-import Numeric.Natural  (Natural)
-import System.IO.Unsafe (unsafeInterleaveIO)
+import Control.Concurrent (ThreadId, forkIOWithUnmask, killThread, myThreadId,
+                           throwTo)
+import Control.Exception  (AsyncException(ThreadKilled),
+                           Exception(fromException, toException), SomeException,
+                           asyncExceptionFromException,
+                           asyncExceptionToException, catch, throwIO)
+import Control.Monad      (join, void, when)
+import Data.Coerce        (coerce)
+import Data.Fixed         (E6, Fixed(MkFixed))
+import Data.IORef         (IORef, newIORef, readIORef, writeIORef)
+import Data.Word          (Word64)
+import GHC.Generics       (Generic)
+import Numeric.Natural    (Natural)
 
 -- | A 'TimerWheel' is a vector-of-collections-of timers to fire. It is
--- configured with a /spoke count/ and /resolution/. A timeout thread is spawned
--- to step through the timer wheel and fire expired timers at regular intervals.
+-- configured with a /spoke count/ and /resolution/. Timers may be scheduled
+-- arbitrarily far in the future. A timeout thread is spawned to step through
+-- the timer wheel and fire expired timers at regular intervals.
 --
 -- * The /spoke count/ determines the size of the timer vector.
 --
@@ -74,20 +68,10 @@ import System.IO.Unsafe (unsafeInterleaveIO)
 --       performed on a job queue.
 --
 --     * Synchronous exceptions thrown by enqueued @IO@ actions will bring the
---       thread down, and no more timeouts will ever fire. If you want to catch
---       exceptions and log them, for example, you will have to bake this into
---       the registered actions yourself.
---
---     * The timeout thread will asynchronously propagate any exception to the
---       thread that created the timer wheel, wrapped inside a 'TimerWheelDied'
---       constructor. This is an attempt at immediately notifying your
---       application when something has gone horribly wrong, so make sure this
---       exception doesn't get lost (as it would if it merely brings down a
---       forked thread).
---
---     * The life of the timeout thread is scoped to the life of the timer
---       wheel. When the timer wheel is garbage collected, the timeout thread
---       will automatically stop doing work, and die gracefully.
+--       thread down, which will cause it to asynchronously throw a
+--       'TimerWheelDied' exception to the thread that 'create'd it. If you want
+--       to catch exceptions and log them, for example, you will have to bake
+--       this into the registered actions yourself.
 --
 -- Below is a depiction of a timer wheel with @6@ timers inserted across @8@
 -- spokes, and a resolution of @0.1s@.
@@ -99,8 +83,7 @@ import System.IO.Unsafe (unsafeInterleaveIO)
 --    +-----+-----+-----+-----+-----+-----+-----+-----+
 -- @
 data TimerWheel =  TimerWheel
-  { -- ^ The length of time that each entry corresponds to, in nanoseconds.
-    wheelSupply :: !Supply
+  { wheelSupply :: !Supply
     -- ^ A supply of unique ints.
   , wheelWheel :: !Wheel
     -- ^ The array of collections of timers.
@@ -111,8 +94,9 @@ data Config
   = Config
   { spokes :: !Natural -- ^ Spoke count.
   , resolution :: !(Fixed E6) -- ^ Resolution, in seconds.
-  } deriving stock (Generic, Show)
+  } deriving (Generic, Show)
 
+-- | The timeout thread died.
 newtype TimerWheelDied
   = TimerWheelDied SomeException
   deriving (Show)
@@ -121,6 +105,10 @@ instance Exception TimerWheelDied where
   toException = asyncExceptionToException
   fromException = asyncExceptionFromException
 
+-- | The timer wheel config was invalid.
+--
+-- * @spokes@ must be positive, and less than @maxBound@ of @Int@.
+-- * @resolution@ must be positive.
 data InvalidTimerWheelConfig
   = InvalidTimerWheelConfig !Config
   deriving (Show)
@@ -129,11 +117,10 @@ instance Exception InvalidTimerWheelConfig
 
 -- | Create a timer wheel.
 --
--- /Throws./ If @spokes == 0@, @spokes > maxBound \@Int@ or @resolution <= 0@,
--- throws an 'InvalidTimerWheelConfig' exception.
+-- /Throws./ If the config is invalid, throws 'InvalidTimerWheelConfig'.
 --
 -- /Throws./ If the timeout thread dies, asynchronously throws 'TimerWheelDied'
--- to the thread that called 'new'.
+-- to the thread that called 'create'.
 create :: Config -> IO TimerWheel
 create config@(Config { spokes, resolution }) = do
   when (invalidConfig config)
@@ -152,7 +139,10 @@ create config@(Config { spokes, resolution }) = do
   reaperThread <-
     forkIOWithUnmask $ \unmask ->
       unmask (Wheel.reap wheel)
-        `catch` \e -> throwTo thread (TimerWheelDied e)
+        `catch` \e ->
+          case fromException e of
+            Just ThreadKilled -> pure ()
+            _                 -> throwTo thread (TimerWheelDied e)
 
   pure TimerWheel
     { wheelSupply = supply
@@ -160,6 +150,7 @@ create config@(Config { spokes, resolution }) = do
     , wheelThread = reaperThread
     }
 
+-- | Tear down a timer wheel by killing the timeout thread.
 destroy :: TimerWheel -> IO ()
 destroy wheel =
   killThread (wheelThread wheel)
@@ -182,65 +173,69 @@ invalidConfig Config { spokes, resolution } =
 -- Subsequent calls to the cancel action have no effect, and continue to return
 -- whatever the first result was.
 register :: TimerWheel -> IO () -> Fixed E6 -> IO (IO Bool)
-register wheel action (MkFixed (fromIntegral -> delay)) = do
-  newEntryId :: Int <-
-    Supply.next (wheelSupply wheel)
-
-  now :: Word64 <-
-    getMonotonicMicros
-
-  let
-    bucketVar :: MutVar RealWorld Entries
-    bucketVar =
-      Wheel.bucket (wheelWheel wheel) now
-
-  atomicModifyMutVar' bucketVar
-    (\entries ->
-      (Entries.insert newEntryId count (const action entries) entries, ()))
-
-  canceledVar :: MVar (Maybe Bool) <-
-    unsafeInterleaveIO (newMVar Nothing)
-
-  pure $ do
-    modifyMVar canceledVar $ \result -> do
-      canceled <-
-        maybe
-          (atomicModifyMutVar' bucketVar
-            (\entries ->
-              maybe
-                (entries, False)
-                (, True)
-                (Entries.delete newEntryId entries)))
-          pure
-          result
-      pure (Just canceled, canceled)
-
-  where
-    count :: Word64
-    count =
-      delay `div` Wheel.lenMicros (wheelWheel wheel)
+register wheel action (MkFixed (fromIntegral -> delay)) =
+  _register wheel action delay
 
 -- | Like 'register', but for when you don't intend to cancel the timer.
 register_ :: TimerWheel -> IO () -> Fixed E6 -> IO ()
 register_ wheel action delay =
   void (register wheel action delay)
 
--- | @recurring wheel delay action@ registers an action __@action@__ in timer
+_register :: TimerWheel -> IO () -> Word64 -> IO (IO Bool)
+_register wheel action delay = do
+  key <- Supply.next (wheelSupply wheel)
+  Wheel.insert (wheelWheel wheel) key action delay
+
+_register_ :: TimerWheel -> IO () -> Word64 -> IO ()
+_register_ wheel action delay =
+  void (_register wheel action delay)
+
+-- | @recurring wheel action delay@ registers an action __@action@__ in timer
 -- wheel __@wheel@__ to fire every __@delay@__ seconds.
 --
 -- Returns an action that, when called, cancels the recurring timer.
 recurring :: TimerWheel -> IO () -> Fixed E6 -> IO (IO ())
-recurring wheel action delay = mdo
-  cancel <- register wheel (action' cancelRef) delay
-  cancelRef <- newIORef cancel
+recurring wheel action (MkFixed (fromIntegral -> delay)) = mdo
+  let
+    doAction :: IO ()
+    doAction = do
+      -- Re-register one bucket early, to account for the fact that timers are
+      -- expired at the *end* of a bucket.
+      --
+      -- +---+---+---+---+
+      -- { A |   |   |   }
+      -- +---+---+---+---+
+      --      |
+      --      The reaper thread fires 'A' approximately here, so if it's meant
+      --      to be repeated every two buckets, and we just re-register it at
+      --      this time, three buckets will pass before it's run again. So, we
+      --      act as if it's still "one bucket ago" at the moment we re-register
+      --      it.
+      writeIORef cancelRef =<<
+        _register
+          wheel
+          doAction
+          (delay - Wheel.resolution (wheelWheel wheel))
+      action
+
+  cancel :: IO Bool <-
+    _register wheel doAction delay
+
+  cancelRef :: IORef (IO Bool) <-
+    newIORef cancel
+
   pure (untilTrue (join (readIORef cancelRef)))
 
+-- | Like 'recurring', but for when you don't intend to cancel the timer.
+recurring_ :: TimerWheel -> IO () -> Fixed E6 -> IO ()
+recurring_ wheel action (MkFixed (fromIntegral -> delay)) =
+  _register_ wheel doAction delay
+
   where
-    action' :: IORef (IO Bool) -> IO ()
-    action' cancelRef = do
+    doAction :: IO ()
+    doAction = do
+      _register_ wheel doAction (delay - Wheel.resolution (wheelWheel wheel))
       action
-      cancel <- register wheel (action' cancelRef) delay
-      writeIORef cancelRef cancel
 
 -- Repeat an IO action until it returns 'True'.
 untilTrue :: IO Bool -> IO ()

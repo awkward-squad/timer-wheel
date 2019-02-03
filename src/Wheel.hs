@@ -1,20 +1,20 @@
 {-# LANGUAGE CPP #-}
 
 module Wheel
-  ( Wheel
+  ( Wheel(resolution)
   , create
   , lenMicros
-  , bucket
+  , insert
   , reap
   ) where
 
 import Entries (Entries)
-import Utils
 
 import qualified Entries as Entries
 
 import Control.Concurrent           (threadDelay)
-import Control.Monad                (join)
+import Control.Concurrent.MVar
+import Control.Monad                (join, when)
 import Data.Foldable                (for_)
 import Data.Primitive.MutVar        (MutVar, atomicModifyMutVar', newMutVar)
 import Data.Primitive.UnliftedArray (MutableUnliftedArray, UnliftedArray,
@@ -23,6 +23,14 @@ import Data.Primitive.UnliftedArray (MutableUnliftedArray, UnliftedArray,
                                      unsafeNewUnliftedArray, writeUnliftedArray)
 import Data.Word                    (Word64)
 import GHC.Prim                     (RealWorld)
+import System.IO.Unsafe             (unsafeInterleaveIO)
+
+#if MIN_VERSION_base(4,11,0)
+import GHC.Clock (getMonotonicTimeNSec)
+#else
+import System.Clock (Clock(Monotonic), getTime, toNanoSecs)
+#endif
+
 
 
 type IORef
@@ -36,7 +44,7 @@ data Wheel
 
 create ::
      Int
-  -> Word64 -- micros
+  -> Word64
   -> IO Wheel
 create spokes resolution = do
   mbuckets :: MutableUnliftedArray RealWorld (IORef Entries) <-
@@ -71,55 +79,101 @@ index :: Wheel -> Word64 -> Int
 index wheel@Wheel{resolution} time =
   fromIntegral (time `div` resolution) `rem` numSpokes wheel
 
+insert ::
+     Wheel
+  -> Int
+  -> IO ()
+  -> Word64
+  -> IO (IO Bool)
+insert wheel key action delay = do
+  now :: Word64 <-
+    getMonotonicMicros
+
+  let
+    time :: Word64
+    time =
+      now + delay
+
+  let
+    count :: Word64
+    count =
+      delay `div` lenMicros wheel
+
+  let
+    bucketVar :: MutVar RealWorld Entries
+    bucketVar =
+      bucket wheel time
+
+  atomicModifyMutVar' bucketVar
+    (\entries ->
+      (Entries.insert key count action entries, ()))
+
+  canceledVar :: MVar (Maybe Bool) <-
+    unsafeInterleaveIO (newMVar Nothing)
+
+  pure $ do
+    modifyMVar canceledVar $ \result -> do
+      canceled <-
+        maybe
+          (atomicModifyMutVar' bucketVar
+            (\entries ->
+              maybe
+                (entries, False)
+                (, True)
+                (Entries.delete key entries)))
+          pure
+          result
+      pure (Just canceled, canceled)
+
+
 reap :: Wheel -> IO ()
 reap wheel@Wheel{buckets, resolution} = do
   now :: Word64 <-
     getMonotonicMicros
 
-  loop (index wheel now)
+  let
+    -- How far in time are we into the very first bucket? Sleep until it's over.
+    elapsedBucketMicros :: Word64
+    elapsedBucketMicros =
+      now `rem` resolution
+
+  let
+    remainingBucketMicros :: Word64
+    remainingBucketMicros =
+      resolution - elapsedBucketMicros
+
+  threadDelay (fromIntegral remainingBucketMicros)
+
+  loop
+    (now + remainingBucketMicros + resolution)
+    (index wheel now)
 
   where
-    -- Reaper loop: we haven't yet run the entries at index 'i'.
-    loop :: Int -> IO ()
-    loop minIndex = do
-      -- Sleep until the next bucket.
-      threadDelay (fromIntegral resolution)
+    loop :: Word64 -> Int -> IO ()
+    loop nextTime i = do
+      join
+        (atomicModifyMutVar' (indexUnliftedArray buckets i)
+          (\entries ->
+            if Entries.null entries
+              then
+                (entries, pure ())
+              else
+                case Entries.partition entries of
+                  (expired, alive) ->
+                    (alive, sequence_ expired)))
 
-      now :: Word64 <-
+      afterTime :: Word64 <-
         getMonotonicMicros
 
-      -- Figure out which bucket we're in. Usually this will be 'minIndex+1',
-      -- but maybe running the entries in bucket 'minIndex-1' took a long time
-      -- and we slept all the way to 'minIndex+2'. In any case, we should run
-      -- the entries in buckets up-to-but-not-including this one, beginning with
-      -- bucket 'minIndex'.
+      when (afterTime < nextTime) $
+        (threadDelay (fromIntegral (nextTime - afterTime)))
 
-      let
-        maxIndex :: Int
-        maxIndex =
-          index wheel now
+      loop (nextTime + resolution) ((i+1) `rem` numSpokes wheel)
 
-      let
-        indices :: [Int]
-        indices =
-          if maxIndex > minIndex
-            then [minIndex .. maxIndex - 1]
-            else [minIndex .. numSpokes wheel - 1] ++ [0 .. maxIndex - 1]
-
-      -- To actually run the entries in a bucket, partition them into
-      -- expired (count == 0) and alive (count > 0). Run the expired entries
-      -- and decrement the alive entries' counts by 1.
-
-      for_ indices $ \i ->
-        join
-          (atomicModifyMutVar' (indexUnliftedArray buckets i)
-            (\entries ->
-              if Entries.null entries
-                then
-                  (entries, pure ())
-                else
-                  case Entries.partition entries of
-                    (expired, alive) ->
-                      (alive, sequence_ expired)))
-
-      loop maxIndex
+getMonotonicMicros :: IO Word64
+getMonotonicMicros =
+#if MIN_VERSION_base(4,11,0)
+  (`div` 1000) <$> getMonotonicTimeNSec
+#else
+  ((`div` 1000) . fromIntegral . toNanoSecs <$> getTime Monotonic)
+#endif

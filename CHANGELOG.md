@@ -8,6 +8,7 @@ and this project adheres to the [Haskell Package Versioning Policy](https://pvp.
 ## Unreleased
 ### Added
 - `destroy` function, for reaping the background thread
+- `recurring_` function
 
 ### Changed
 - If the timer wheel reaper thread crashes, it will propagate the exception to
@@ -19,6 +20,7 @@ spin forever and peg a CPU
 - Use `Config` type for creating a timer wheel
 - Change argument order around
 - Rename `new` to `create`
+- Make recurring timers more accurate
 
 ## [0.1.0] - 2018-07-18
 
