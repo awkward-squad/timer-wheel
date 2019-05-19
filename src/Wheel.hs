@@ -12,18 +12,13 @@ import Entries (Entries)
 
 import qualified Entries as Entries
 
-import Control.Concurrent           (threadDelay)
+import Control.Concurrent      (threadDelay)
 import Control.Concurrent.MVar
-import Control.Monad                (join, when)
-import Data.Foldable                (for_)
-import Data.Primitive.MutVar        (MutVar, atomicModifyMutVar', newMutVar)
-import Data.Primitive.UnliftedArray (MutableUnliftedArray, UnliftedArray,
-                                     freezeUnliftedArray, indexUnliftedArray,
-                                     sizeofUnliftedArray,
-                                     unsafeNewUnliftedArray, writeUnliftedArray)
-import Data.Word                    (Word64)
-import GHC.Prim                     (RealWorld)
-import System.IO.Unsafe             (unsafeInterleaveIO)
+import Control.Monad           (join, when)
+import Data.IORef
+import Data.Vector             (Vector)
+import Data.Word               (Word64)
+import System.IO.Unsafe        (unsafeInterleaveIO)
 
 #if MIN_VERSION_base(4,11,0)
 import GHC.Clock (getMonotonicTimeNSec)
@@ -31,14 +26,13 @@ import GHC.Clock (getMonotonicTimeNSec)
 import System.Clock (Clock(Monotonic), getTime, toNanoSecs)
 #endif
 
+import qualified Data.Vector as Vector
 
 
-type IORef
-  = MutVar RealWorld
 
 data Wheel
   = Wheel
-  { buckets :: !(UnliftedArray (IORef Entries))
+  { buckets :: !(Vector (IORef Entries))
   , resolution :: !Word64 -- micros
   }
 
@@ -47,14 +41,8 @@ create ::
   -> Word64
   -> IO Wheel
 create spokes resolution = do
-  mbuckets :: MutableUnliftedArray RealWorld (IORef Entries) <-
-    unsafeNewUnliftedArray spokes
-
-  for_ [0 .. spokes-1] $ \i ->
-    writeUnliftedArray mbuckets i =<< newMutVar Entries.empty
-
-  buckets :: UnliftedArray (IORef Entries) <-
-    freezeUnliftedArray mbuckets 0 spokes
+  buckets :: Vector (IORef Entries) <-
+    Vector.replicateM spokes (newIORef Entries.empty)
 
   pure Wheel
     { buckets = buckets
@@ -63,7 +51,7 @@ create spokes resolution = do
 
 numSpokes :: Wheel -> Int
 numSpokes wheel =
-  sizeofUnliftedArray (buckets wheel)
+  Vector.length (buckets wheel)
 
 lenMicros :: Wheel -> Word64
 lenMicros wheel =
@@ -71,7 +59,7 @@ lenMicros wheel =
 
 bucket :: Wheel -> Word64 -> IORef Entries
 bucket wheel time =
-  indexUnliftedArray
+  Vector.unsafeIndex
     (buckets wheel)
     (index wheel time)
 
@@ -100,11 +88,11 @@ insert wheel key action delay = do
       delay `div` lenMicros wheel
 
   let
-    bucketVar :: MutVar RealWorld Entries
-    bucketVar =
+    bucketRef :: IORef Entries
+    bucketRef =
       bucket wheel time
 
-  atomicModifyMutVar' bucketVar
+  atomicModifyIORef' bucketRef
     (\entries ->
       (Entries.insert key count action entries, ()))
 
@@ -115,7 +103,7 @@ insert wheel key action delay = do
     modifyMVar canceledVar $ \result -> do
       canceled <-
         maybe
-          (atomicModifyMutVar' bucketVar
+          (atomicModifyIORef' bucketRef
             (\entries ->
               maybe
                 (entries, False)
@@ -152,7 +140,7 @@ reap wheel@Wheel{buckets, resolution} = do
     loop :: Word64 -> Int -> IO ()
     loop nextTime i = do
       join
-        (atomicModifyMutVar' (indexUnliftedArray buckets i)
+        (atomicModifyIORef' (Vector.unsafeIndex buckets i)
           (\entries ->
             if Entries.null entries
               then
