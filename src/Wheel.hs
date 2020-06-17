@@ -1,5 +1,3 @@
-{-# LANGUAGE CPP #-}
-
 module Wheel
   ( Wheel(resolution)
   , create
@@ -18,13 +16,8 @@ import Control.Monad           (join, when)
 import Data.IORef
 import Data.Vector             (Vector)
 import Data.Word               (Word64)
+import GHC.Clock               (getMonotonicTimeNSec)
 import System.IO.Unsafe        (unsafeInterleaveIO)
-
-#if MIN_VERSION_base(4,11,0)
-import GHC.Clock (getMonotonicTimeNSec)
-#else
-import System.Clock (Clock(Monotonic), getTime, toNanoSecs)
-#endif
 
 import qualified Data.Vector as Vector
 
@@ -160,8 +153,4 @@ reap wheel@Wheel{buckets, resolution} = do
 
 getMonotonicMicros :: IO Word64
 getMonotonicMicros =
-#if MIN_VERSION_base(4,11,0)
   (`div` 1000) <$> getMonotonicTimeNSec
-#else
-  ((`div` 1000) . fromIntegral . toNanoSecs <$> getTime Monotonic)
-#endif

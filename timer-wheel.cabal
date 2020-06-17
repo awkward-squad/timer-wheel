@@ -1,7 +1,7 @@
 cabal-version: 2.0
 
 name: timer-wheel
-version: 0.2.0.1
+version: 0.2.1
 category: Data
 description:
   This library provides a timer wheel data structure for
@@ -23,15 +23,10 @@ author: Mitchell Rosen
 maintainer: Mitchell Rosen <mitchellwrosen@gmail.com>
 homepage: https://github.com/mitchellwrosen/timer-wheel
 bug-reports: https://github.com/mitchellwrosen/timer-wheel/issues
-copyright: (c) 2018, Mitchell Rosen
+copyright: (c) 2018-2020, Mitchell Rosen
 license: BSD3
 license-file: LICENSE
 build-type: Simple
-tested-with:
-    GHC == 8.0.2
-  , GHC == 8.2.2
-  , GHC == 8.4.4
-  , GHC == 8.6.5
 
 extra-source-files:
   .travis.yml
@@ -44,15 +39,14 @@ source-repository head
 library
   build-depends:
     atomic-primops ^>= 0.8,
-    base ^>= 4.9 || ^>= 4.10 || ^>= 4.11 || ^>= 4.12,
+    base ^>= 4.9 || ^>= 4.10 || ^>= 4.11 || ^>= 4.12 || ^>= 4.13 || ^>= 4.14,
     psqueues ^>= 0.2.7,
     vector ^>= 0.10 || ^>= 0.11 || ^>= 0.12
-  if !impl(ghc >= 8.4)
-    build-depends:
-      clock ^>= 0.7
 
   default-extensions:
+    DeriveAnyClass
     DeriveGeneric
+    DerivingStrategies
     GeneralizedNewtypeDeriving
     LambdaCase
     NamedFieldPuns
@@ -69,23 +63,15 @@ library
     Data.TimerWheel
 
   ghc-options:
-    -fprint-expanded-synonyms
-    -fprint-explicit-foralls
-    -fprint-explicit-kinds
-    -fprint-unicode-syntax
-    -Wall
-    -Wcompat
-    -Widentities
-    -Wincomplete-record-updates
-    -Wincomplete-uni-patterns
-    -Wmissing-local-signatures
-    -Wnoncanonical-monad-instances
-    -Wnoncanonical-monadfail-instances
-    -Wredundant-constraints
-  if impl(ghc >= 8.4)
+    -Weverything
+    -Wno-all-missed-specialisations
+    -Wno-implicit-prelude
+    -Wno-missing-import-lists
+    -Wno-unsafe
+  if impl(ghc >= 8.10)
     ghc-options:
-      -Wpartial-fields
-      -Wmissing-export-lists
+      -Wno-missing-safe-haskell-mode
+      -Wno-prepositive-qualified-module
 
   hs-source-dirs:
     src

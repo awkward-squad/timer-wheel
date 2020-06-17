@@ -94,12 +94,12 @@ data Config
   = Config
   { spokes :: !Natural -- ^ Spoke count.
   , resolution :: !(Fixed E6) -- ^ Resolution, in seconds.
-  } deriving (Generic, Show)
+  } deriving stock (Generic, Show)
 
 -- | The timeout thread died.
 newtype TimerWheelDied
   = TimerWheelDied SomeException
-  deriving (Show)
+  deriving stock (Show)
 
 instance Exception TimerWheelDied where
   toException = asyncExceptionToException
@@ -111,9 +111,8 @@ instance Exception TimerWheelDied where
 -- * @resolution@ must be positive.
 data InvalidTimerWheelConfig
   = InvalidTimerWheelConfig !Config
-  deriving (Show)
-
-instance Exception InvalidTimerWheelConfig
+  deriving stock (Show)
+  deriving anyclass (Exception)
 
 -- | Create a timer wheel.
 --
