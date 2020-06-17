@@ -52,8 +52,11 @@ jobs:
         if: steps.cache-cabal.outputs.cache-hit != 'true'
         run: cabal update
 
-      - name: cabal build
-        run: cabal build --disable-optimization
+      - name: cabal build timer-wheel:lib:timer-wheel
+        run: cabal build timer-wheel:lib:timer-wheel --disable-optimization --enable-tests
+
+      - name: cabal build timer-wheel:test:tests
+        run: cabal build timer-wheel:test:tests --disable-optimization --enable-tests
 
       - name: cabal run timer-wheel:test:tests
-        run: cabal run timer-wheel:test:tests --disable-optimization
+        run: cabal run timer-wheel:test:tests --disable-optimization --enable-tests

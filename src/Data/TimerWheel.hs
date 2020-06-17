@@ -176,7 +176,7 @@ register ::
   -> IO () -- ^ Action
   -> Fixed E6 -- ^ Delay, in seconds
   -> IO (IO Bool)
-register wheel action (MkFixed (fromIntegral -> delay)) =
+register wheel action (secondsToMicros -> delay) =
   _register wheel action delay
 
 -- | Like 'register', but for when you don't intend to cancel the timer.
@@ -193,12 +193,16 @@ _register wheel action delay = do
   key <- Supply.next (wheelSupply wheel)
   Wheel.insert (wheelWheel wheel) key action delay
 
-_register_ :: TimerWheel -> IO () -> Word64 -> IO ()
-_register_ wheel action delay =
-  void (_register wheel action delay)
+_reregister :: TimerWheel -> IO () -> Word64 -> IO (IO Bool)
+_reregister wheel action delay =
+  _register wheel action (if reso > delay then 0 else delay - reso)
+  where
+    reso :: Word64
+    reso = Wheel.resolution (wheelWheel wheel)
 
 -- | @recurring wheel action delay@ registers an action __@action@__ in timer
--- wheel __@wheel@__ to fire every __@delay@__ seconds.
+-- wheel __@wheel@__ to fire every __@delay@__ seconds, or every /resolution/
+-- seconds, whichever is smaller.
 --
 -- Returns an action that, when called, cancels the recurring timer.
 recurring ::
@@ -206,7 +210,7 @@ recurring ::
   -> IO () -- ^ Action
   -> Fixed E6 -- ^ Delay, in seconds
   -> IO (IO ())
-recurring wheel action (MkFixed (fromIntegral -> delay)) = mdo
+recurring wheel action (secondsToMicros -> delay) = mdo
   let
     doAction :: IO ()
     doAction = do
@@ -222,11 +226,7 @@ recurring wheel action (MkFixed (fromIntegral -> delay)) = mdo
       --      this time, three buckets will pass before it's run again. So, we
       --      act as if it's still "one bucket ago" at the moment we re-register
       --      it.
-      writeIORef cancelRef =<<
-        _register
-          wheel
-          doAction
-          (delay - Wheel.resolution (wheelWheel wheel))
+      writeIORef cancelRef =<< _reregister wheel doAction delay
       action
 
   cancel :: IO Bool <-
@@ -243,14 +243,18 @@ recurring_ ::
   -> IO () -- ^ Action
   -> Fixed E6 -- ^ Delay, in seconds
   -> IO ()
-recurring_ wheel action (MkFixed (fromIntegral -> delay)) =
-  _register_ wheel doAction delay
+recurring_ wheel action (secondsToMicros -> delay) =
+  void (_register wheel doAction delay)
 
   where
     doAction :: IO ()
     doAction = do
-      _register_ wheel doAction (delay - Wheel.resolution (wheelWheel wheel))
+      void (_reregister wheel doAction delay)
       action
+
+secondsToMicros :: Fixed E6 -> Word64
+secondsToMicros (MkFixed micros) =
+  fromIntegral (max 0 micros)
 
 -- Repeat an IO action until it returns 'True'.
 untilTrue :: IO Bool -> IO ()

@@ -8,21 +8,24 @@ and this project adheres to the [Haskell Package Versioning Policy](https://pvp.
 ## [0.2.1] 2020-06-16
 
 ### Added
-- Support for GHC 8.8, GHC 8.10
+- Add support for GHC 8.8, GHC 8.10
+
+### Changed
+- Fix underflow bug that affected recurring timers
 
 ### Removed
-- Support for GHC < 8.6
+- Remove support for GHC < 8.6
 
 ## [0.2.0.1] - 2019-05-19
 
 ### Changed
-- Swapped out `ghc-prim` and `primitive` for `vector`
+- Swap out `ghc-prim` and `primitive` for `vector`
 
 ## [0.2.0] - 2019-02-03
 
 ### Added
-- `destroy` function, for reaping the background thread
-- `recurring_` function
+- Add `destroy` function, for reaping the background thread
+- Add `recurring_` function
 
 ### Changed
 - If the timer wheel reaper thread crashes, it will propagate the exception to

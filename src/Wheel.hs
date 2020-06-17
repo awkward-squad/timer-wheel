@@ -29,10 +29,7 @@ data Wheel
   , resolution :: !Word64 -- micros
   }
 
-create ::
-     Int
-  -> Word64
-  -> IO Wheel
+create :: Int -> Word64 -> IO Wheel
 create spokes resolution = do
   buckets :: Vector (IORef Entries) <-
     Vector.replicateM spokes (newIORef Entries.empty)
@@ -60,12 +57,7 @@ index :: Wheel -> Word64 -> Int
 index wheel@Wheel{resolution} time =
   fromIntegral (time `div` resolution) `rem` numSpokes wheel
 
-insert ::
-     Wheel
-  -> Int
-  -> IO ()
-  -> Word64
-  -> IO (IO Bool)
+insert :: Wheel -> Int -> IO () -> Word64 -> IO (IO Bool)
 insert wheel key action delay = do
   now :: Word64 <-
     getMonotonicMicros
