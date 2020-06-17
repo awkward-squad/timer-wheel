@@ -1,8 +1,9 @@
 module Supply
-  ( Supply
-  , new
-  , next
-  ) where
+  ( Supply,
+    new,
+    next,
+  )
+where
 
 import Data.Atomics.Counter (AtomicCounter, incrCounter, newCounter)
 

@@ -1,38 +1,48 @@
+{-# LANGUAGE RecursiveDo #-}
 {-# OPTIONS_GHC -funbox-strict-fields #-}
 
 module Data.TimerWheel
   ( -- * Timer wheel
-    TimerWheel
-  , create
-  , destroy
-  , Config(..)
-  , register
-  , register_
-  , recurring
-  , recurring_
-  , InvalidTimerWheelConfig(..)
-  , TimerWheelDied(..)
-  ) where
+    TimerWheel,
+    create,
+    destroy,
+    Config (..),
+    register,
+    register_,
+    recurring,
+    recurring_,
+    InvalidTimerWheelConfig (..),
+    TimerWheelDied (..),
+  )
+where
 
+import Control.Concurrent
+  ( ThreadId,
+    forkIOWithUnmask,
+    killThread,
+    myThreadId,
+    throwTo,
+  )
+import Control.Exception
+  ( AsyncException (ThreadKilled),
+    Exception (fromException, toException),
+    SomeException,
+    asyncExceptionFromException,
+    asyncExceptionToException,
+    catch,
+    throwIO,
+  )
+import Control.Monad (join, void, when)
+import Data.Coerce (coerce)
+import Data.Fixed (E6, Fixed (MkFixed))
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import Data.Word (Word64)
+import GHC.Generics (Generic)
+import Numeric.Natural (Natural)
 import Supply (Supply)
-import Wheel  (Wheel)
-
 import qualified Supply
+import Wheel (Wheel)
 import qualified Wheel
-
-import Control.Concurrent (ThreadId, forkIOWithUnmask, killThread, myThreadId,
-                           throwTo)
-import Control.Exception  (AsyncException(ThreadKilled),
-                           Exception(fromException, toException), SomeException,
-                           asyncExceptionFromException,
-                           asyncExceptionToException, catch, throwIO)
-import Control.Monad      (join, void, when)
-import Data.Coerce        (coerce)
-import Data.Fixed         (E6, Fixed(MkFixed))
-import Data.IORef         (IORef, newIORef, readIORef, writeIORef)
-import Data.Word          (Word64)
-import GHC.Generics       (Generic)
-import Numeric.Natural    (Natural)
 
 -- | A 'TimerWheel' is a vector-of-collections-of timers to fire. It is
 -- configured with a /spoke count/ and /resolution/. Timers may be scheduled
@@ -82,19 +92,21 @@ import Numeric.Natural    (Natural)
 --    |     | A   |     | B,C | D   |     |     | E,F |
 --    +-----+-----+-----+-----+-----+-----+-----+-----+
 -- @
-data TimerWheel =  TimerWheel
-  { wheelSupply :: !Supply
-    -- ^ A supply of unique ints.
-  , wheelWheel :: !Wheel
-    -- ^ The array of collections of timers.
-  , wheelThread :: !ThreadId
+data TimerWheel = TimerWheel
+  { -- | A supply of unique ints.
+    wheelSupply :: !Supply,
+    -- | The array of collections of timers.
+    wheelWheel :: !Wheel,
+    wheelThread :: !ThreadId
   }
 
-data Config
-  = Config
-  { spokes :: !Natural -- ^ Spoke count.
-  , resolution :: !(Fixed E6) -- ^ Resolution, in seconds.
-  } deriving stock (Generic, Show)
+data Config = Config
+  { -- | Spoke count.
+    spokes :: !Natural,
+    -- | Resolution, in seconds.
+    resolution :: !(Fixed E6)
+  }
+  deriving stock (Generic, Show)
 
 -- | The timeout thread died.
 newtype TimerWheelDied
@@ -121,8 +133,9 @@ data InvalidTimerWheelConfig
 -- /Throws./ If the timeout thread dies, asynchronously throws 'TimerWheelDied'
 -- to the thread that called 'create'.
 create :: Config -> IO TimerWheel
-create config@(Config { spokes, resolution }) = do
-  when (invalidConfig config)
+create config@(Config {spokes, resolution}) = do
+  when
+    (invalidConfig config)
     (throwIO (InvalidTimerWheelConfig config))
 
   wheel :: Wheel <-
@@ -141,13 +154,14 @@ create config@(Config { spokes, resolution }) = do
         `catch` \e ->
           case fromException e of
             Just ThreadKilled -> pure ()
-            _                 -> throwTo thread (TimerWheelDied e)
+            _ -> throwTo thread (TimerWheelDied e)
 
-  pure TimerWheel
-    { wheelSupply = supply
-    , wheelWheel = wheel
-    , wheelThread = reaperThread
-    }
+  pure
+    TimerWheel
+      { wheelSupply = supply,
+        wheelWheel = wheel,
+        wheelThread = reaperThread
+      }
 
 -- | Tear down a timer wheel by killing the timeout thread.
 destroy :: TimerWheel -> IO ()
@@ -155,11 +169,11 @@ destroy wheel =
   killThread (wheelThread wheel)
 
 invalidConfig :: Config -> Bool
-invalidConfig Config { spokes, resolution } =
+invalidConfig Config {spokes, resolution} =
   or
-    [ spokes == 0
-    , spokes > fromIntegral (maxBound :: Int)
-    , resolution <= 0
+    [ spokes == 0,
+      spokes > fromIntegral (maxBound :: Int),
+      resolution <= 0
     ]
 
 -- | @register wheel action delay@ registers an action __@action@__ in timer
@@ -172,19 +186,25 @@ invalidConfig Config { spokes, resolution } =
 -- Subsequent calls to the cancel action have no effect, and continue to return
 -- whatever the first result was.
 register ::
-     TimerWheel -- ^
-  -> IO () -- ^ Action
-  -> Fixed E6 -- ^ Delay, in seconds
-  -> IO (IO Bool)
+  -- |
+  TimerWheel ->
+  -- | Action
+  IO () ->
+  -- | Delay, in seconds
+  Fixed E6 ->
+  IO (IO Bool)
 register wheel action (secondsToMicros -> delay) =
   _register wheel action delay
 
 -- | Like 'register', but for when you don't intend to cancel the timer.
 register_ ::
-     TimerWheel -- ^
-  -> IO () -- ^ Action
-  -> Fixed E6 -- ^ Delay, in seconds
-  -> IO ()
+  -- |
+  TimerWheel ->
+  -- | Action
+  IO () ->
+  -- | Delay, in seconds
+  Fixed E6 ->
+  IO ()
 register_ wheel action delay =
   void (register wheel action delay)
 
@@ -206,28 +226,29 @@ _reregister wheel action delay =
 --
 -- Returns an action that, when called, cancels the recurring timer.
 recurring ::
-     TimerWheel
-  -> IO () -- ^ Action
-  -> Fixed E6 -- ^ Delay, in seconds
-  -> IO (IO ())
+  TimerWheel ->
+  -- | Action
+  IO () ->
+  -- | Delay, in seconds
+  Fixed E6 ->
+  IO (IO ())
 recurring wheel action (secondsToMicros -> delay) = mdo
-  let
-    doAction :: IO ()
-    doAction = do
-      -- Re-register one bucket early, to account for the fact that timers are
-      -- expired at the *end* of a bucket.
-      --
-      -- +---+---+---+---+
-      -- { A |   |   |   }
-      -- +---+---+---+---+
-      --      |
-      --      The reaper thread fires 'A' approximately here, so if it's meant
-      --      to be repeated every two buckets, and we just re-register it at
-      --      this time, three buckets will pass before it's run again. So, we
-      --      act as if it's still "one bucket ago" at the moment we re-register
-      --      it.
-      writeIORef cancelRef =<< _reregister wheel doAction delay
-      action
+  let doAction :: IO ()
+      doAction = do
+        -- Re-register one bucket early, to account for the fact that timers are
+        -- expired at the *end* of a bucket.
+        --
+        -- +---+---+---+---+
+        -- { A |   |   |   }
+        -- +---+---+---+---+
+        --      |
+        --      The reaper thread fires 'A' approximately here, so if it's meant
+        --      to be repeated every two buckets, and we just re-register it at
+        --      this time, three buckets will pass before it's run again. So, we
+        --      act as if it's still "one bucket ago" at the moment we re-register
+        --      it.
+        writeIORef cancelRef =<< _reregister wheel doAction delay
+        action
 
   cancel :: IO Bool <-
     _register wheel doAction delay
@@ -239,13 +260,14 @@ recurring wheel action (secondsToMicros -> delay) = mdo
 
 -- | Like 'recurring', but for when you don't intend to cancel the timer.
 recurring_ ::
-     TimerWheel
-  -> IO () -- ^ Action
-  -> Fixed E6 -- ^ Delay, in seconds
-  -> IO ()
+  TimerWheel ->
+  -- | Action
+  IO () ->
+  -- | Delay, in seconds
+  Fixed E6 ->
+  IO ()
 recurring_ wheel action (secondsToMicros -> delay) =
   void (_register wheel doAction delay)
-
   where
     doAction :: IO ()
     doAction = do
