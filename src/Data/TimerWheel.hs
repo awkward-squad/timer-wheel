@@ -11,7 +11,6 @@ module Data.TimerWheel
     recurring,
     recurring_,
     InvalidTimerWheelConfig (..),
-    TimerWheelDied (..),
   )
 where
 
@@ -19,7 +18,6 @@ import Control.Concurrent
 import Control.Exception
 import Control.Monad (join, void, when)
 import Data.Fixed (E6, Fixed (MkFixed))
-import Data.Functor (($>))
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import GHC.Generics (Generic)
 import Micros (Micros (Micros))
@@ -108,41 +106,33 @@ data InvalidTimerWheelConfig
 --
 -- /Throws./ If the config is invalid, throws 'InvalidTimerWheelConfig'.
 --
--- /Throws./ If the timeout thread dies, throws 'TimerWheelDied'.
+-- /Throws./ The exception the given action throws, if any.
+--
+-- /Throws./ The exception the timer wheel thread throws, if any.
 with :: Config -> (TimerWheel -> IO a) -> IO a
-with config action =
-  uninterruptibleMask \restore -> do
-    wheel <- create config
-    let cleanup = destroy wheel
-    result <- restore (action wheel) `onException` cleanup
-    cleanup $> result
-
-create :: Config -> IO TimerWheel
-create config@(Config {spokes, resolution}) = do
+with config@(Config {spokes, resolution}) action = do
   when (invalidConfig config) (throwIO (InvalidTimerWheelConfig config))
-  wheel <- Wheel.create (fromIntegral spokes) (Micros.fromFixed resolution)
-  supply <- Supply.new
-
+  wheelWheel <- Wheel.create (fromIntegral spokes) (Micros.fromFixed resolution)
+  wheelSupply <- Supply.new
   thread <- myThreadId
-  reaperThread <-
-    forkIOWithUnmask $ \unmask ->
-      unmask (Wheel.reap wheel)
-        `catch` \e ->
-          case fromException e of
-            Just ThreadKilled -> pure ()
-            _ -> throwTo thread (TimerWheelDied e)
-
-  pure
-    TimerWheel
-      { wheelSupply = supply,
-        wheelWheel = wheel,
-        wheelThread = reaperThread
-      }
-
--- | Tear down a timer wheel by killing the timeout thread.
-destroy :: TimerWheel -> IO ()
-destroy wheel =
-  killThread (wheelThread wheel)
+  uninterruptibleMask \restore -> do
+    wheelThread <-
+      forkIOWithUnmask $ \unmask ->
+        unmask (Wheel.reap wheelWheel)
+          `catch` \e ->
+            case fromException e of
+              Just ThreadKilled -> pure ()
+              _ -> throwTo thread (TimerWheelDied e)
+    let cleanup = killThread wheelThread
+    let handler :: SomeException -> IO void
+        handler ex = do
+          cleanup
+          case fromException ex of
+            Just (TimerWheelDied ex') -> throwIO ex'
+            _ -> throwIO ex
+    result <- restore (action TimerWheel {wheelSupply, wheelWheel, wheelThread}) `catch` handler
+    cleanup
+    pure result
 
 invalidConfig :: Config -> Bool
 invalidConfig Config {spokes, resolution} =
