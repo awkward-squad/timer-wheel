@@ -4,8 +4,7 @@
 module Data.TimerWheel
   ( -- * Timer wheel
     TimerWheel,
-    create,
-    destroy,
+    with,
     Config (..),
     register,
     register_,
@@ -17,23 +16,10 @@ module Data.TimerWheel
 where
 
 import Control.Concurrent
-  ( ThreadId,
-    forkIOWithUnmask,
-    killThread,
-    myThreadId,
-    throwTo,
-  )
 import Control.Exception
-  ( AsyncException (ThreadKilled),
-    Exception (fromException, toException),
-    SomeException,
-    asyncExceptionFromException,
-    asyncExceptionToException,
-    catch,
-    throwIO,
-  )
 import Control.Monad (join, void, when)
 import Data.Fixed (E6, Fixed (MkFixed))
+import Data.Functor (($>))
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import GHC.Generics (Generic)
 import Micros (Micros (Micros))
@@ -118,12 +104,19 @@ data InvalidTimerWheelConfig
   deriving stock (Show)
   deriving anyclass (Exception)
 
--- | Create a timer wheel.
+-- | Perform an action with a timer wheel.
 --
 -- /Throws./ If the config is invalid, throws 'InvalidTimerWheelConfig'.
 --
--- /Throws./ If the timeout thread dies, asynchronously throws 'TimerWheelDied'
--- to the thread that called 'create'.
+-- /Throws./ If the timeout thread dies, throws 'TimerWheelDied'.
+with :: Config -> (TimerWheel -> IO a) -> IO a
+with config action =
+  uninterruptibleMask \restore -> do
+    wheel <- create config
+    let cleanup = destroy wheel
+    result <- restore (action wheel) `onException` cleanup
+    cleanup $> result
+
 create :: Config -> IO TimerWheel
 create config@(Config {spokes, resolution}) = do
   when (invalidConfig config) (throwIO (InvalidTimerWheelConfig config))
