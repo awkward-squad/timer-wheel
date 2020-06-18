@@ -1,6 +1,8 @@
 {-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE StrictData #-}
 {-# OPTIONS_GHC -funbox-strict-fields #-}
 
+-- | A simple, hashed timer wheel.
 module Data.TimerWheel
   ( -- * Timer wheel
     TimerWheel,
@@ -26,9 +28,9 @@ import qualified Supply
 import Wheel (Wheel)
 import qualified Wheel
 
--- | A 'TimerWheel' is a vector-of-collections-of timers to fire. It is configured with a /spoke count/ and
--- /resolution/. Timers may be scheduled arbitrarily far in the future. A timeout thread is spawned to step through the
--- timer wheel and fire expired timers at regular intervals.
+-- | A timer wheel is a vector-of-collections-of timers to fire. It is configured with a /spoke count/ and /resolution/.
+-- Timers may be scheduled arbitrarily far in the future. A timeout thread is spawned to step through the timer wheel
+-- and fire expired timers at regular intervals.
 --
 -- * The /spoke count/ determines the size of the timer vector.
 --
@@ -54,35 +56,50 @@ import qualified Wheel
 --       them directly. Otherwise, consider registering an action that enqueues the /real/ action to be performed on a
 --       job queue.
 --
---     * Synchronous exceptions thrown by enqueued @IO@ actions will bring the thread down, which will cause it to
---       asynchronously throw a 'TimerWheelDied' exception to the thread that 'create'd it. If you want to catch
---       exceptions and log them, for example, you will have to bake this into the registered actions yourself.
+--     * Synchronous exceptions thrown by enqueued @IO@ actions will bring the thread down, and the exception will be
+--       propagated to the thread that created the timer wheel. If you want to catch exceptions and log them, for
+--       example, you will have to bake this into the registered actions yourself.
 --
--- Below is a depiction of a timer wheel with @6@ timers inserted across @8@ spokes, and a resolution of @0.1s@.
+-- As an example, below is a depiction of a timer wheel with @6@ timers inserted across @8@ spokes, and a resolution of
+-- @.1s@. It depicts a cursor at @.3s@, which indicates where the timeout thread currently is.
 --
 -- @
---    0s   .1s   .2s   .3s   .4s   .5s   .6s   .7s   .8s
---    +-----+-----+-----+-----+-----+-----+-----+-----+
---    |     | A   |     | B,C | D   |     |     | E,F |
---    +-----+-----+-----+-----+-----+-----+-----+-----+
+--  0       .1      .2      .3      .4      .5      .6      .7
+-- ┌───────┬───────┬───────┬───────┬───────┬───────┬───────┬───────┐
+-- │       │ A⁰    │       │ B¹ C⁰ │ D⁰    │       │       │ E² F⁰ │
+-- └───────┴───────┴───────┴───────┴───────┴───────┴───────┴───────┘
+--                           ↑
+-- @
+--
+-- After @.1s@, the timeout thread will advance to the next spoke and process all of the timers it passed over. In
+-- this case, __C__ will fire, and __B__ will be put back with its count decremented to @0@. This is how the timer wheel
+-- can schedule a timer to fire arbitrarily far in the future: its count is simply the number of times its delay wraps
+-- the entire duration of the timer wheel.
+--
+-- @
+--  0       .1      .2      .3      .4      .5      .6      .7
+-- ┌───────┬───────┬───────┬───────┬───────┬───────┬───────┬───────┐
+-- │       │ A⁰    │       │ B⁰    │ D⁰    │       │       │ E² F⁰ │
+-- └───────┴───────┴───────┴───────┴───────┴───────┴───────┴───────┘
+--                                   ↑
 -- @
 data TimerWheel = TimerWheel
   { -- | A supply of unique ints.
-    wheelSupply :: !Supply,
+    wheelSupply :: Supply,
     -- | The array of collections of timers.
-    wheelWheel :: !Wheel,
-    wheelThread :: !ThreadId
+    wheelWheel :: Wheel,
+    wheelThread :: ThreadId
   }
 
 -- | Timer wheel config.
 --
--- * @spokes@ must be ∈ @(0, maxBound]@.
--- * @resolution@ must ∈ @(0, ∞]@.
+-- * @spokes@ must be ∈ @(0, maxBound]@
+-- * @resolution@ must ∈ @(0, ∞]@
 data Config = Config
   { -- | Spoke count.
-    spokes :: !Int,
+    spokes :: Int,
     -- | Resolution, in seconds.
-    resolution :: !(Fixed E6)
+    resolution :: Fixed E6
   }
   deriving stock (Generic, Show)
 
@@ -97,11 +114,11 @@ instance Exception TimerWheelDied where
 
 -- | Perform an action with a timer wheel.
 --
--- /Throws./ Calls 'error' if the config is invalid.
+-- /Throws./
 --
--- /Throws./ The exception the given action throws, if any.
---
--- /Throws./ The exception the timer wheel thread throws, if any.
+--   * Calls 'error' if the config is invalid
+--   * Throws the exception the given action throws, if any
+--   * Throws the exception the timer wheel thread throws, if any
 with :: Config -> (TimerWheel -> IO a) -> IO a
 with config action =
   case validateConfig config of
@@ -179,7 +196,7 @@ _reregister wheel action delay =
     reso = Wheel.resolution (wheelWheel wheel)
 
 -- | @recurring wheel action delay@ registers an action __@action@__ in timer wheel __@wheel@__ to fire every
--- __@delay@__ seconds, or every /resolution/ seconds, whichever is smaller.
+-- __@delay@__ seconds (or every /resolution/ seconds, whichever is smaller).
 --
 -- Returns an action that, when called, cancels the recurring timer.
 recurring ::
