@@ -16,7 +16,7 @@ main = do
     with Config { spokes = 4, resolution = 0.05 } \wheel -> do
       var <- newEmptyMVar
       let n = 1000
-      replicateM_ n (register_ wheel (putMVar var ()) 0)
+      replicateM_ n (register_ wheel 0 (putMVar var ()))
       replicateM_ n (takeMVar var)
 
   do
@@ -24,24 +24,23 @@ main = do
     var <- newEmptyMVar
     with Config { spokes = 4, resolution = 0.05 } \wheel -> do
       let n = 1000
-      cancels <- replicateM n (register wheel (putMVar var ()) 0)
+      cancels <- replicateM n (register wheel 0 (putMVar var ()))
       successes <- sequence (take (n `div` 2) cancels)
       replicateM_ (n - length (filter id successes)) (takeMVar var)
 
   do
-    putStrLn "Re-calling a successful cancel works"
+    putStrLn "Successful `cancel` returns True (then False)"
     with Config { spokes = 4, resolution = 0.05 } \wheel -> do
-      cancel <- register wheel (pure ()) 1
+      cancel <- register wheel 1 (pure ())
       cancel `is` True
-      cancel `is` True
+      cancel `is` False
 
   do
-    putStrLn "Re-calling a failed cancel works"
+    putStrLn "Unsuccessful `cancel` returns False"
     with Config { spokes = 4, resolution = 0.05 } \wheel -> do
       var <- newEmptyMVar
-      cancel <- register wheel (putMVar var ()) 0
+      cancel <- register wheel 0 (putMVar var ())
       takeMVar var
-      cancel `is` False
       cancel `is` False
 
   do
@@ -50,7 +49,7 @@ main = do
       canary <- newIORef () -- kept alive only by timer
       weakCanary <- mkWeakIORef canary (pure ())
       var <- newEmptyMVar
-      cancel <- recurring wheel (readIORef canary >> putMVar var ()) 0
+      cancel <- recurring wheel 0 (readIORef canary >> putMVar var ())
       replicateM_ 2 (takeMVar var)
       cancel -- should drop reference canary after a GC
       performGC
@@ -61,7 +60,7 @@ main = do
     catch
       (with Config { spokes = 4, resolution = 0.05 } \wheel -> do
         var <- newEmptyMVar
-        register_ wheel (throwIO Bye >> putMVar var ()) 0
+        register_ wheel 0 (throwIO Bye >> putMVar var ())
         takeMVar var
         throwIO (userError "fail"))
       (\ex ->

@@ -7,7 +7,6 @@ module Wheel
   )
 where
 
-import Control.Concurrent.MVar
 import Control.Monad (join, when)
 import Data.IORef
 import Data.Vector (Vector)
@@ -16,7 +15,6 @@ import Entries (Entries)
 import qualified Entries as Entries
 import Micros (Micros (..))
 import qualified Micros
-import System.IO.Unsafe (unsafeInterleaveIO)
 import Timestamp (Timestamp)
 import qualified Timestamp
 
@@ -48,32 +46,21 @@ index wheel@Wheel {resolution} timestamp =
 
 insert :: Wheel -> Int -> Micros -> IO () -> IO (IO Bool)
 insert wheel key delay action = do
-  now :: Timestamp <-
-    Timestamp.now
-
-  let bucketRef :: IORef Entries
-      bucketRef =
-        bucket wheel (now `Timestamp.plus` delay)
-
-  let insertEntry :: Entries -> Entries
-      insertEntry = Entries.insert key (unMicros (delay `Micros.div` lenMicros wheel)) action
+  bucketRef <- do
+    now <- Timestamp.now
+    pure (bucket wheel (now `Timestamp.plus` delay))
 
   atomicModifyIORef' bucketRef (\entries -> (insertEntry entries, ()))
 
-  canceledVar :: MVar (Maybe Bool) <-
-    unsafeInterleaveIO (newMVar Nothing)
-
   pure do
-    modifyMVar canceledVar \maybeCanceled -> do
-      canceled <-
-        case maybeCanceled of
-          Nothing ->
-            atomicModifyIORef' bucketRef \entries ->
-              case Entries.delete key entries of
-                Nothing -> (entries, False)
-                Just entries' -> (entries', True)
-          Just canceled -> pure canceled
-      pure (Just canceled, canceled)
+    atomicModifyIORef' bucketRef \entries ->
+      case Entries.delete key entries of
+        Nothing -> (entries, False)
+        Just entries' -> (entries', True)
+  where
+    insertEntry :: Entries -> Entries
+    insertEntry =
+      Entries.insert key (unMicros (delay `Micros.div` lenMicros wheel)) action
 
 reap :: Wheel -> IO ()
 reap wheel@Wheel {buckets, resolution} = do

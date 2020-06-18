@@ -19,7 +19,7 @@ import Control.Concurrent
 import Control.Exception
 import Control.Monad (join, void)
 import Data.Fixed (E6, Fixed (MkFixed))
-import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import Data.IORef (newIORef, readIORef, writeIORef)
 import GHC.Generics (Generic)
 import Micros (Micros (Micros))
 import qualified Micros
@@ -157,9 +157,7 @@ validateConfig config@Config {spokes, resolution}
 -- seconds.
 --
 -- Returns an action that, when called, attempts to cancel the timer, and returns whether or not it was successful
--- (@False@ means the timer has already fired).
---
--- Subsequent calls to the cancel action have no effect, and continue to return whatever the first result was.
+-- (@False@ means the timer has already fired, or was already cancelled).
 register ::
   -- |
   TimerWheel ->
@@ -188,6 +186,18 @@ _register wheel delay action = do
   key <- Supply.next (wheelSupply wheel)
   Wheel.insert (wheelWheel wheel) key delay action
 
+-- Re-register one bucket early, to account for the fact that timers are
+-- expired at the *end* of a bucket.
+--
+-- +---+---+---+---+
+-- { A |   |   |   }
+-- +---+---+---+---+
+--      |
+--      The reaper thread fires 'A' approximately here, so if it's meant
+--      to be repeated every two buckets, and we just re-register it at
+--      this time, three buckets will pass before it's run again. So, we
+--      act as if it's still "one bucket ago" at the moment we re-register
+--      it.
 _reregister :: TimerWheel -> Micros -> IO () -> IO (IO Bool)
 _reregister wheel delay =
   _register wheel (if reso > delay then Micros 0 else delay `Micros.minus` reso)
@@ -209,27 +219,10 @@ recurring ::
 recurring wheel (secondsToMicros -> delay) action = mdo
   let doAction :: IO ()
       doAction = do
-        -- Re-register one bucket early, to account for the fact that timers are
-        -- expired at the *end* of a bucket.
-        --
-        -- +---+---+---+---+
-        -- { A |   |   |   }
-        -- +---+---+---+---+
-        --      |
-        --      The reaper thread fires 'A' approximately here, so if it's meant
-        --      to be repeated every two buckets, and we just re-register it at
-        --      this time, three buckets will pass before it's run again. So, we
-        --      act as if it's still "one bucket ago" at the moment we re-register
-        --      it.
         writeIORef cancelRef =<< _reregister wheel delay doAction
         action
-
-  cancel :: IO Bool <-
-    _register wheel delay doAction
-
-  cancelRef :: IORef (IO Bool) <-
-    newIORef cancel
-
+  cancel <- _register wheel delay doAction
+  cancelRef <- newIORef cancel
   pure (untilTrue (join (readIORef cancelRef)))
 
 -- | Like 'recurring', but for when you don't intend to cancel the timer.

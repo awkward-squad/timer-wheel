@@ -6,15 +6,16 @@ module Supply
 where
 
 import Data.Atomics.Counter (AtomicCounter, incrCounter, newCounter)
+import Data.Coerce (coerce)
 
 newtype Supply
   = Supply AtomicCounter
 
 new :: IO Supply
 new =
-  Supply <$> newCounter 0
+  coerce (newCounter 0)
 
 next :: Supply -> IO Int
-next (Supply counter) =
-  incrCounter 1 counter
+next =
+  coerce (incrCounter 1)
 {-# INLINE next #-}
