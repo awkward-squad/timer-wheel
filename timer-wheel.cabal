@@ -1,7 +1,7 @@
 cabal-version: 2.0
 
 name: timer-wheel
-version: 0.2.1
+version: 0.3.0
 category: Data
 description:
   This library provides a timer wheel data structure for
@@ -73,6 +73,7 @@ library
     src
 
   other-modules:
+    Data.TimerWheel.Internal.Config
     Entries
     Micros
     Supply

@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to the [Haskell Package Versioning Policy](https://pvp.haskell.org/).
 
-## [Unreleased]
+## [0.3.0] - Unreleased
 
 ### Added
 - Add `with`
@@ -15,6 +15,7 @@ and this project adheres to the [Haskell Package Versioning Policy](https://pvp.
 - Change type of `spokes` from `Natural` to `Int`
 - Change order of delay and action arguments in `register`, `register_`, `recurring`, and `recurring_`
 - Simplify `cancel` to return `True` at most once
+- Throw an error if a negative delay is provided to `register`, `register_`, `recurring`, or `recurring_`
 - Fix underflow bug that affected recurring timers
 
 ### Removed

@@ -3,6 +3,7 @@
 module Micros
   ( Micros (..),
     fromFixed,
+    fromSeconds,
     Micros.div,
     minus,
     scale,
@@ -22,6 +23,11 @@ newtype Micros = Micros {unMicros :: Word64}
 fromFixed :: Fixed E6 -> Micros
 fromFixed =
   coerce @(Integer -> Word64) fromIntegral
+
+fromSeconds :: Fixed E6 -> Micros
+fromSeconds seconds@(MkFixed micros)
+  | micros < 0 = error ("[timer-wheel] invalid seconds: " ++ show seconds)
+  | otherwise = Micros (fromIntegral micros)
 
 div :: Micros -> Micros -> Micros
 div =

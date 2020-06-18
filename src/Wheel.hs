@@ -1,3 +1,5 @@
+{-# LANGUAGE StrictData #-}
+
 module Wheel
   ( Wheel (resolution),
     create,
@@ -19,8 +21,8 @@ import Timestamp (Timestamp)
 import qualified Timestamp
 
 data Wheel = Wheel
-  { buckets :: !(Vector (IORef Entries)),
-    resolution :: !Micros
+  { buckets :: Vector (IORef Entries),
+    resolution :: Micros
   }
 
 create :: Int -> Micros -> IO Wheel

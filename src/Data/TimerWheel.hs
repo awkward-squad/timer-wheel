@@ -18,9 +18,10 @@ where
 import Control.Concurrent
 import Control.Exception
 import Control.Monad (join, void)
-import Data.Fixed (E6, Fixed (MkFixed))
+import Data.Fixed (E6, Fixed)
 import Data.IORef (newIORef, readIORef, writeIORef)
-import GHC.Generics (Generic)
+import Data.TimerWheel.Internal.Config (Config)
+import qualified Data.TimerWheel.Internal.Config as Config
 import Micros (Micros (Micros))
 import qualified Micros
 import Supply (Supply)
@@ -85,23 +86,11 @@ import qualified Wheel
 -- @
 data TimerWheel = TimerWheel
   { -- | A supply of unique ints.
-    wheelSupply :: Supply,
+    supply :: Supply,
     -- | The array of collections of timers.
-    wheelWheel :: Wheel,
-    wheelThread :: ThreadId
+    wheel :: Wheel,
+    thread :: ThreadId
   }
-
--- | Timer wheel config.
---
--- * @spokes@ must be ∈ @(0, maxBound]@
--- * @resolution@ must ∈ @(0, ∞]@
-data Config = Config
-  { -- | Spoke count.
-    spokes :: Int,
-    -- | Resolution, in seconds.
-    resolution :: Fixed E6
-  }
-  deriving stock (Generic, Show)
 
 -- | The timeout thread died.
 newtype TimerWheelDied
@@ -125,32 +114,31 @@ with config action =
     () -> _with config action
 
 _with :: Config -> (TimerWheel -> IO a) -> IO a
-_with Config {spokes, resolution} action = do
-  wheelWheel <- Wheel.create spokes (Micros.fromFixed resolution)
-  wheelSupply <- Supply.new
-  thread <- myThreadId
+_with config action = do
+  wheel <- Wheel.create (Config.spokes config) (Micros.fromFixed (Config.resolution config))
+  supply <- Supply.new
+  parentThread <- myThreadId
   uninterruptibleMask \restore -> do
-    wheelThread <-
+    thread <-
       forkIOWithUnmask $ \unmask ->
-        unmask (Wheel.reap wheelWheel)
-          `catch` \e ->
-            case fromException e of
-              Just ThreadKilled -> pure ()
-              _ -> throwTo thread (TimerWheelDied e)
-    let cleanup = killThread wheelThread
+        unmask (Wheel.reap wheel) `catch` \e ->
+          case fromException e of
+            Just ThreadKilled -> pure ()
+            _ -> throwTo parentThread (TimerWheelDied e)
+    let cleanup = killThread thread
     let handler :: SomeException -> IO void
         handler ex = do
           cleanup
           case fromException ex of
             Just (TimerWheelDied ex') -> throwIO ex'
             _ -> throwIO ex
-    result <- restore (action TimerWheel {wheelSupply, wheelWheel, wheelThread}) `catch` handler
+    result <- restore (action TimerWheel {supply, wheel, thread}) `catch` handler
     cleanup
     pure result
 
 validateConfig :: Config -> ()
-validateConfig config@Config {spokes, resolution}
-  | spokes <= 0 || resolution <= 0 = error ("[timer-wheel] invalid config: " ++ show config)
+validateConfig config
+  | Config.spokes config <= 0 || Config.resolution config <= 0 = error ("[timer-wheel] invalid config: " ++ show config)
   | otherwise = ()
 
 -- | @register wheel delay action@ registers an action __@action@__ in timer wheel __@wheel@__ to fire after __@delay@__
@@ -158,6 +146,10 @@ validateConfig config@Config {spokes, resolution}
 --
 -- Returns an action that, when called, attempts to cancel the timer, and returns whether or not it was successful
 -- (@False@ means the timer has already fired, or was already cancelled).
+--
+-- /Throws/.
+--
+--   * Calls 'error' if the given number of seconds is negative.
 register ::
   -- |
   TimerWheel ->
@@ -166,10 +158,14 @@ register ::
   -- | Action
   IO () ->
   IO (IO Bool)
-register wheel (secondsToMicros -> delay) =
+register wheel (Micros.fromSeconds -> delay) =
   _register wheel delay
 
 -- | Like 'register', but for when you don't intend to cancel the timer.
+--
+-- /Throws/.
+--
+--   * Calls 'error' if the given number of seconds is negative.
 register_ ::
   -- |
   TimerWheel ->
@@ -182,9 +178,53 @@ register_ wheel delay action =
   void (register wheel delay action)
 
 _register :: TimerWheel -> Micros -> IO () -> IO (IO Bool)
-_register wheel delay action = do
-  key <- Supply.next (wheelSupply wheel)
-  Wheel.insert (wheelWheel wheel) key delay action
+_register TimerWheel {supply, wheel} delay action = do
+  key <- Supply.next supply
+  Wheel.insert wheel key delay action
+
+-- | @recurring wheel action delay@ registers an action __@action@__ in timer wheel __@wheel@__ to fire every
+-- __@delay@__ seconds (or every /resolution/ seconds, whichever is smaller).
+--
+-- Returns an action that, when called, cancels the recurring timer.
+--
+-- /Throws/.
+--
+--   * Calls 'error' if the given number of seconds is negative.
+recurring ::
+  TimerWheel ->
+  -- | Delay, in seconds
+  Fixed E6 ->
+  -- | Action
+  IO () ->
+  IO (IO ())
+recurring wheel (Micros.fromSeconds -> delay) action = mdo
+  let doAction :: IO ()
+      doAction = do
+        writeIORef cancelRef =<< _reregister wheel delay doAction
+        action
+  cancel <- _register wheel delay doAction
+  cancelRef <- newIORef cancel
+  pure (untilTrue (join (readIORef cancelRef)))
+
+-- | Like 'recurring', but for when you don't intend to cancel the timer.
+--
+-- /Throws/.
+--
+--   * Calls 'error' if the given number of seconds is negative.
+recurring_ ::
+  TimerWheel ->
+  -- | Delay, in seconds
+  Fixed E6 ->
+  -- | Action
+  IO () ->
+  IO ()
+recurring_ wheel (Micros.fromSeconds -> delay) action =
+  void (_register wheel delay doAction)
+  where
+    doAction :: IO ()
+    doAction = do
+      _ <- _reregister wheel delay doAction
+      action
 
 -- Re-register one bucket early, to account for the fact that timers are
 -- expired at the *end* of a bucket.
@@ -203,47 +243,12 @@ _reregister wheel delay =
   _register wheel (if reso > delay then Micros 0 else delay `Micros.minus` reso)
   where
     reso :: Micros
-    reso = Wheel.resolution (wheelWheel wheel)
+    reso =
+      resolution wheel
 
--- | @recurring wheel action delay@ registers an action __@action@__ in timer wheel __@wheel@__ to fire every
--- __@delay@__ seconds (or every /resolution/ seconds, whichever is smaller).
---
--- Returns an action that, when called, cancels the recurring timer.
-recurring ::
-  TimerWheel ->
-  -- | Delay, in seconds
-  Fixed E6 ->
-  -- | Action
-  IO () ->
-  IO (IO ())
-recurring wheel (secondsToMicros -> delay) action = mdo
-  let doAction :: IO ()
-      doAction = do
-        writeIORef cancelRef =<< _reregister wheel delay doAction
-        action
-  cancel <- _register wheel delay doAction
-  cancelRef <- newIORef cancel
-  pure (untilTrue (join (readIORef cancelRef)))
-
--- | Like 'recurring', but for when you don't intend to cancel the timer.
-recurring_ ::
-  TimerWheel ->
-  -- | Delay, in seconds
-  Fixed E6 ->
-  -- | Action
-  IO () ->
-  IO ()
-recurring_ wheel (secondsToMicros -> delay) action =
-  void (_register wheel delay doAction)
-  where
-    doAction :: IO ()
-    doAction = do
-      _ <- _reregister wheel delay doAction
-      action
-
-secondsToMicros :: Fixed E6 -> Micros
-secondsToMicros (MkFixed micros) =
-  Micros (fromIntegral (max 0 micros))
+resolution :: TimerWheel -> Micros
+resolution =
+  Wheel.resolution . wheel
 
 -- Repeat an IO action until it returns 'True'.
 untilTrue :: IO Bool -> IO ()
