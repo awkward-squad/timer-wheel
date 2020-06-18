@@ -1,9 +1,9 @@
 {-# LANGUAGE TypeApplications #-}
 
-module Entries
+module Data.TimerWheel.Internal.Entries
   ( Entries,
     empty,
-    Entries.null,
+    Data.TimerWheel.Internal.Entries.null,
     size,
     insert,
     delete,

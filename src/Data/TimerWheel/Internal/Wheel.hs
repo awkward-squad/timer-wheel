@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module Wheel
+module Data.TimerWheel.Internal.Wheel
   ( Wheel (resolution),
     create,
     lenMicros,
@@ -11,14 +11,14 @@ where
 
 import Control.Monad (join, when)
 import Data.IORef
+import Data.TimerWheel.Internal.Entries (Entries)
+import qualified Data.TimerWheel.Internal.Entries as Entries
+import Data.TimerWheel.Internal.Micros (Micros (..))
+import qualified Data.TimerWheel.Internal.Micros as Micros
+import Data.TimerWheel.Internal.Timestamp (Timestamp)
+import qualified Data.TimerWheel.Internal.Timestamp as Timestamp
 import Data.Vector (Vector)
 import qualified Data.Vector as Vector
-import Entries (Entries)
-import qualified Entries as Entries
-import Micros (Micros (..))
-import qualified Micros
-import Timestamp (Timestamp)
-import qualified Timestamp
 
 data Wheel = Wheel
   { buckets :: Vector (IORef Entries),

@@ -1,19 +1,19 @@
 {-# LANGUAGE TypeApplications #-}
 
-module Timestamp
+module Data.TimerWheel.Internal.Timestamp
   ( Timestamp (..),
     epoch,
     minus,
     now,
     plus,
-    Timestamp.rem,
+    Data.TimerWheel.Internal.Timestamp.rem,
   )
 where
 
 import Data.Coerce (coerce)
+import Data.TimerWheel.Internal.Micros (Micros (..))
 import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
-import Micros (Micros (..))
 
 newtype Timestamp
   = Timestamp Word64

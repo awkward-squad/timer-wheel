@@ -1,10 +1,10 @@
 {-# LANGUAGE TypeApplications #-}
 
-module Micros
+module Data.TimerWheel.Internal.Micros
   ( Micros (..),
     fromFixed,
     fromSeconds,
-    Micros.div,
+    Data.TimerWheel.Internal.Micros.div,
     minus,
     scale,
     sleep,

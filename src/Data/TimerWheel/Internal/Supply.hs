@@ -1,4 +1,4 @@
-module Supply
+module Data.TimerWheel.Internal.Supply
   ( Supply,
     new,
     next,

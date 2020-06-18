@@ -74,11 +74,11 @@ library
 
   other-modules:
     Data.TimerWheel.Internal.Config
-    Entries
-    Micros
-    Supply
-    Timestamp
-    Wheel
+    Data.TimerWheel.Internal.Entries
+    Data.TimerWheel.Internal.Micros
+    Data.TimerWheel.Internal.Supply
+    Data.TimerWheel.Internal.Timestamp
+    Data.TimerWheel.Internal.Wheel
 
 test-suite tests
   build-depends:

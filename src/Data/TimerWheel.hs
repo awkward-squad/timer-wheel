@@ -18,16 +18,18 @@ where
 import Control.Concurrent
 import Control.Exception
 import Control.Monad (join, void)
+import Data.Bool (bool)
 import Data.Fixed (E6, Fixed)
+import Data.Function (fix)
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.TimerWheel.Internal.Config (Config)
 import qualified Data.TimerWheel.Internal.Config as Config
-import Micros (Micros (Micros))
-import qualified Micros
-import Supply (Supply)
-import qualified Supply
-import Wheel (Wheel)
-import qualified Wheel
+import Data.TimerWheel.Internal.Micros (Micros (Micros))
+import qualified Data.TimerWheel.Internal.Micros as Micros
+import Data.TimerWheel.Internal.Supply (Supply)
+import qualified Data.TimerWheel.Internal.Supply as Supply
+import Data.TimerWheel.Internal.Wheel (Wheel)
+import qualified Data.TimerWheel.Internal.Wheel as Wheel
 
 -- | A timer wheel is a vector-of-collections-of timers to fire. It is configured with a /spoke count/ and /resolution/.
 -- Timers may be scheduled arbitrarily far in the future. A timeout thread is spawned to step through the timer wheel
@@ -138,8 +140,12 @@ _with config action = do
 
 validateConfig :: Config -> ()
 validateConfig config
-  | Config.spokes config <= 0 || Config.resolution config <= 0 = error ("[timer-wheel] invalid config: " ++ show config)
+  | invalid = error ("[timer-wheel] invalid config: " ++ show config)
   | otherwise = ()
+  where
+    invalid :: Bool
+    invalid =
+      Config.spokes config <= 0 || Config.resolution config <= 0
 
 -- | @register wheel delay action@ registers an action __@action@__ in timer wheel __@wheel@__ to fire after __@delay@__
 -- seconds.
@@ -205,6 +211,12 @@ recurring wheel (Micros.fromSeconds -> delay) action = mdo
   cancel <- _register wheel delay doAction
   cancelRef <- newIORef cancel
   pure (untilTrue (join (readIORef cancelRef)))
+  where
+    -- Repeat an IO action until it returns 'True'.
+    untilTrue :: IO Bool -> IO ()
+    untilTrue m =
+      fix \again ->
+        m >>= bool again (pure ())
 
 -- | Like 'recurring', but for when you don't intend to cancel the timer.
 --
@@ -249,10 +261,3 @@ _reregister wheel delay =
 resolution :: TimerWheel -> Micros
 resolution =
   Wheel.resolution . wheel
-
--- Repeat an IO action until it returns 'True'.
-untilTrue :: IO Bool -> IO ()
-untilTrue action =
-  action >>= \case
-    True -> pure ()
-    False -> untilTrue action
