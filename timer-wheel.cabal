@@ -29,8 +29,9 @@ license-file: LICENSE
 build-type: Simple
 
 extra-source-files:
-  .travis.yml
   CHANGELOG.md
+  README.md
+  cabal.project
 
 source-repository head
   type: git
