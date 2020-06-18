@@ -13,6 +13,7 @@ and this project adheres to the [Haskell Package Versioning Policy](https://pvp.
 
 ### Changed
 - Change type of `spokes` from `Natural` to `Int`
+- Change order of delay and action arguments in `register`, `register_`, `recurring`, and `recurring_`
 - Fix underflow bug that affected recurring timers
 
 ### Removed

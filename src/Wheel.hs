@@ -46,8 +46,8 @@ index :: Wheel -> Timestamp -> Int
 index wheel@Wheel {resolution} timestamp =
   fromIntegral (Timestamp.epoch resolution timestamp) `rem` numSpokes wheel
 
-insert :: Wheel -> Int -> IO () -> Micros -> IO (IO Bool)
-insert wheel key action delay = do
+insert :: Wheel -> Int -> Micros -> IO () -> IO (IO Bool)
+insert wheel key delay action = do
   now :: Timestamp <-
     Timestamp.now
 

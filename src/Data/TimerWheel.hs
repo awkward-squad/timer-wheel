@@ -153,7 +153,7 @@ validateConfig config@Config {spokes, resolution}
   | spokes <= 0 || resolution <= 0 = error ("[timer-wheel] invalid config: " ++ show config)
   | otherwise = ()
 
--- | @register wheel action delay@ registers an action __@action@__ in timer wheel __@wheel@__ to fire after __@delay@__
+-- | @register wheel delay action@ registers an action __@action@__ in timer wheel __@wheel@__ to fire after __@delay@__
 -- seconds.
 --
 -- Returns an action that, when called, attempts to cancel the timer, and returns whether or not it was successful
@@ -163,34 +163,34 @@ validateConfig config@Config {spokes, resolution}
 register ::
   -- |
   TimerWheel ->
-  -- | Action
-  IO () ->
   -- | Delay, in seconds
   Fixed E6 ->
+  -- | Action
+  IO () ->
   IO (IO Bool)
-register wheel action (secondsToMicros -> delay) =
-  _register wheel action delay
+register wheel (secondsToMicros -> delay) =
+  _register wheel delay
 
 -- | Like 'register', but for when you don't intend to cancel the timer.
 register_ ::
   -- |
   TimerWheel ->
-  -- | Action
-  IO () ->
   -- | Delay, in seconds
   Fixed E6 ->
+  -- | Action
+  IO () ->
   IO ()
-register_ wheel action delay =
-  void (register wheel action delay)
+register_ wheel delay action =
+  void (register wheel delay action)
 
-_register :: TimerWheel -> IO () -> Micros -> IO (IO Bool)
-_register wheel action delay = do
+_register :: TimerWheel -> Micros -> IO () -> IO (IO Bool)
+_register wheel delay action = do
   key <- Supply.next (wheelSupply wheel)
-  Wheel.insert (wheelWheel wheel) key action delay
+  Wheel.insert (wheelWheel wheel) key delay action
 
-_reregister :: TimerWheel -> IO () -> Micros -> IO (IO Bool)
-_reregister wheel action delay =
-  _register wheel action (if reso > delay then Micros 0 else delay `Micros.minus` reso)
+_reregister :: TimerWheel -> Micros -> IO () -> IO (IO Bool)
+_reregister wheel delay =
+  _register wheel (if reso > delay then Micros 0 else delay `Micros.minus` reso)
   where
     reso :: Micros
     reso = Wheel.resolution (wheelWheel wheel)
@@ -201,12 +201,12 @@ _reregister wheel action delay =
 -- Returns an action that, when called, cancels the recurring timer.
 recurring ::
   TimerWheel ->
-  -- | Action
-  IO () ->
   -- | Delay, in seconds
   Fixed E6 ->
+  -- | Action
+  IO () ->
   IO (IO ())
-recurring wheel action (secondsToMicros -> delay) = mdo
+recurring wheel (secondsToMicros -> delay) action = mdo
   let doAction :: IO ()
       doAction = do
         -- Re-register one bucket early, to account for the fact that timers are
@@ -221,11 +221,11 @@ recurring wheel action (secondsToMicros -> delay) = mdo
         --      this time, three buckets will pass before it's run again. So, we
         --      act as if it's still "one bucket ago" at the moment we re-register
         --      it.
-        writeIORef cancelRef =<< _reregister wheel doAction delay
+        writeIORef cancelRef =<< _reregister wheel delay doAction
         action
 
   cancel :: IO Bool <-
-    _register wheel doAction delay
+    _register wheel delay doAction
 
   cancelRef :: IORef (IO Bool) <-
     newIORef cancel
@@ -235,17 +235,17 @@ recurring wheel action (secondsToMicros -> delay) = mdo
 -- | Like 'recurring', but for when you don't intend to cancel the timer.
 recurring_ ::
   TimerWheel ->
-  -- | Action
-  IO () ->
   -- | Delay, in seconds
   Fixed E6 ->
+  -- | Action
+  IO () ->
   IO ()
-recurring_ wheel action (secondsToMicros -> delay) =
-  void (_register wheel doAction delay)
+recurring_ wheel (secondsToMicros -> delay) action =
+  void (_register wheel delay doAction)
   where
     doAction :: IO ()
     doAction = do
-      _ <- _reregister wheel doAction delay
+      _ <- _reregister wheel delay doAction
       action
 
 secondsToMicros :: Fixed E6 -> Micros
