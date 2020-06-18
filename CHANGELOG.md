@@ -12,11 +12,13 @@ and this project adheres to the [Haskell Package Versioning Policy](https://pvp.
 - Add support for GHC 8.8, GHC 8.10
 
 ### Changed
+- Change type of `spokes` from `Natural` to `Int`
 - Fix underflow bug that affected recurring timers
 
 ### Removed
 - Remove `create`, `destroy`
-- Remove `TimerWheelDied` exception. `with` now simply re-throws the exception that the timer wheel thread throws.
+- Remove `TimerWheelDied` exception. `with` now simply re-throws the exception that the timer wheel thread throws
+- Remove `InvalidTimerWheelConfig` exception. `error` is used instead
 - Remove support for GHC < 8.6
 
 ## [0.2.0.1] - 2019-05-19

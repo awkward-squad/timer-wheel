@@ -10,19 +10,17 @@ module Data.TimerWheel
     register_,
     recurring,
     recurring_,
-    InvalidTimerWheelConfig (..),
   )
 where
 
 import Control.Concurrent
 import Control.Exception
-import Control.Monad (join, void, when)
+import Control.Monad (join, void)
 import Data.Fixed (E6, Fixed (MkFixed))
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import GHC.Generics (Generic)
 import Micros (Micros (Micros))
 import qualified Micros
-import Numeric.Natural (Natural)
 import Supply (Supply)
 import qualified Supply
 import Wheel (Wheel)
@@ -76,9 +74,13 @@ data TimerWheel = TimerWheel
     wheelThread :: !ThreadId
   }
 
+-- | Timer wheel config.
+--
+-- * @spokes@ must be ∈ @(0, maxBound]@.
+-- * @resolution@ must ∈ @(0, ∞]@.
 data Config = Config
   { -- | Spoke count.
-    spokes :: !Natural,
+    spokes :: !Int,
     -- | Resolution, in seconds.
     resolution :: !(Fixed E6)
   }
@@ -93,26 +95,21 @@ instance Exception TimerWheelDied where
   toException = asyncExceptionToException
   fromException = asyncExceptionFromException
 
--- | The timer wheel config was invalid.
---
--- * @spokes@ must be positive, and less than @maxBound@ of @Int@.
--- * @resolution@ must be positive.
-data InvalidTimerWheelConfig
-  = InvalidTimerWheelConfig !Config
-  deriving stock (Show)
-  deriving anyclass (Exception)
-
 -- | Perform an action with a timer wheel.
 --
--- /Throws./ If the config is invalid, throws 'InvalidTimerWheelConfig'.
+-- /Throws./ Calls 'error' if the config is invalid.
 --
 -- /Throws./ The exception the given action throws, if any.
 --
 -- /Throws./ The exception the timer wheel thread throws, if any.
 with :: Config -> (TimerWheel -> IO a) -> IO a
-with config@(Config {spokes, resolution}) action = do
-  when (invalidConfig config) (throwIO (InvalidTimerWheelConfig config))
-  wheelWheel <- Wheel.create (fromIntegral spokes) (Micros.fromFixed resolution)
+with config action =
+  case validateConfig config of
+    () -> _with config action
+
+_with :: Config -> (TimerWheel -> IO a) -> IO a
+_with Config {spokes, resolution} action = do
+  wheelWheel <- Wheel.create spokes (Micros.fromFixed resolution)
   wheelSupply <- Supply.new
   thread <- myThreadId
   uninterruptibleMask \restore -> do
@@ -134,13 +131,10 @@ with config@(Config {spokes, resolution}) action = do
     cleanup
     pure result
 
-invalidConfig :: Config -> Bool
-invalidConfig Config {spokes, resolution} =
-  or
-    [ spokes == 0,
-      spokes > fromIntegral (maxBound :: Int),
-      resolution <= 0
-    ]
+validateConfig :: Config -> ()
+validateConfig config@Config {spokes, resolution}
+  | spokes <= 0 || resolution <= 0 = error ("[timer-wheel] invalid config: " ++ show config)
+  | otherwise = ()
 
 -- | @register wheel action delay@ registers an action __@action@__ in timer wheel __@wheel@__ to fire after __@delay@__
 -- seconds.
