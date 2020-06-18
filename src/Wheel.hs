@@ -7,24 +7,25 @@ module Wheel
   )
 where
 
-import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar
 import Control.Monad (join, when)
 import Data.IORef
 import Data.Vector (Vector)
 import qualified Data.Vector as Vector
-import Data.Word (Word64)
 import Entries (Entries)
 import qualified Entries as Entries
-import GHC.Clock (getMonotonicTimeNSec)
+import Micros (Micros (..))
+import qualified Micros
 import System.IO.Unsafe (unsafeInterleaveIO)
+import Timestamp (Timestamp)
+import qualified Timestamp
 
 data Wheel = Wheel
   { buckets :: !(Vector (IORef Entries)),
-    resolution :: !Word64 -- micros
+    resolution :: !Micros
   }
 
-create :: Int -> Word64 -> IO Wheel
+create :: Int -> Micros -> IO Wheel
 create spokes resolution = do
   buckets <- Vector.replicateM spokes (newIORef Entries.empty)
   pure Wheel {buckets, resolution}
@@ -33,29 +34,29 @@ numSpokes :: Wheel -> Int
 numSpokes wheel =
   Vector.length (buckets wheel)
 
-lenMicros :: Wheel -> Word64
+lenMicros :: Wheel -> Micros
 lenMicros wheel =
-  fromIntegral (numSpokes wheel) * resolution wheel
+  Micros.scale (numSpokes wheel) (resolution wheel)
 
-bucket :: Wheel -> Word64 -> IORef Entries
-bucket wheel time =
-  Vector.unsafeIndex (buckets wheel) (index wheel time)
+bucket :: Wheel -> Timestamp -> IORef Entries
+bucket wheel timestamp =
+  Vector.unsafeIndex (buckets wheel) (index wheel timestamp)
 
-index :: Wheel -> Word64 -> Int
-index wheel@Wheel {resolution} time =
-  fromIntegral (time `div` resolution) `rem` numSpokes wheel
+index :: Wheel -> Timestamp -> Int
+index wheel@Wheel {resolution} timestamp =
+  fromIntegral (Timestamp.epoch resolution timestamp) `rem` numSpokes wheel
 
-insert :: Wheel -> Int -> IO () -> Word64 -> IO (IO Bool)
+insert :: Wheel -> Int -> IO () -> Micros -> IO (IO Bool)
 insert wheel key action delay = do
-  now :: Word64 <-
-    getMonotonicMicros
+  now :: Timestamp <-
+    Timestamp.now
 
   let bucketRef :: IORef Entries
       bucketRef =
-        bucket wheel (now + delay)
+        bucket wheel (now `Timestamp.plus` delay)
 
   let insertEntry :: Entries -> Entries
-      insertEntry = Entries.insert key (delay `div` lenMicros wheel) action
+      insertEntry = Entries.insert key (unMicros (delay `Micros.div` lenMicros wheel)) action
 
   atomicModifyIORef' bucketRef (\entries -> (insertEntry entries, ()))
 
@@ -76,44 +77,20 @@ insert wheel key action delay = do
 
 reap :: Wheel -> IO ()
 reap wheel@Wheel {buckets, resolution} = do
-  now :: Word64 <-
-    getMonotonicMicros
-
-  let -- How far in time are we into the very first bucket? Sleep until it's over.
-      elapsedBucketMicros :: Word64
-      elapsedBucketMicros =
-        now `rem` resolution
-
-  let remainingBucketMicros :: Word64
-      remainingBucketMicros =
-        resolution - elapsedBucketMicros
-
-  threadDelay (fromIntegral remainingBucketMicros)
-
-  loop (now + remainingBucketMicros + resolution) (index wheel now)
+  now <- Timestamp.now
+  let remainingBucketMicros = resolution `Micros.minus` (now `Timestamp.rem` resolution)
+  Micros.sleep remainingBucketMicros
+  loop (now `Timestamp.plus` remainingBucketMicros `Timestamp.plus` resolution) (index wheel now)
   where
-    loop :: Word64 -> Int -> IO ()
+    loop :: Timestamp -> Int -> IO ()
     loop nextTime i = do
-      join
-        ( atomicModifyIORef'
-            (Vector.unsafeIndex buckets i)
-            ( \entries ->
-                if Entries.null entries
-                  then (entries, pure ())
-                  else case Entries.partition entries of
-                    (expired, alive) ->
-                      (alive, sequence_ expired)
-            )
-        )
-
-      afterTime :: Word64 <-
-        getMonotonicMicros
-
-      when (afterTime < nextTime) do
-        threadDelay (fromIntegral (nextTime - afterTime))
-
-      loop (nextTime + resolution) ((i + 1) `rem` numSpokes wheel)
-
-getMonotonicMicros :: IO Word64
-getMonotonicMicros =
-  (`div` 1000) <$> getMonotonicTimeNSec
+      join (atomicModifyIORef' (Vector.unsafeIndex buckets i) expire)
+      afterTime <- Timestamp.now
+      when (afterTime < nextTime) (Micros.sleep (nextTime `Timestamp.minus` afterTime))
+      loop (nextTime `Timestamp.plus` resolution) ((i + 1) `rem` numSpokes wheel)
+    expire :: Entries -> (Entries, IO ())
+    expire entries
+      | Entries.null entries = (entries, pure ())
+      | otherwise = (alive, sequence_ expired)
+      where
+        (expired, alive) = Entries.partition entries

@@ -79,7 +79,9 @@ library
 
   other-modules:
     Entries
+    Micros
     Supply
+    Timestamp
     Wheel
 
 test-suite tests
