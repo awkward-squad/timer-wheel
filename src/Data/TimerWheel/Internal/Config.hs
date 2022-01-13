@@ -12,8 +12,8 @@ import GHC.Generics (Generic)
 -- * @resolution@ must ∈ @(0, ∞]@
 data Config = Config
   { -- | Spoke count.
-    spokes :: Int,
+    spokes :: {-# UNPACK #-} !Int,
     -- | Resolution, in seconds.
-    resolution :: Fixed E6
+    resolution :: !(Fixed E6)
   }
   deriving stock (Generic, Show)

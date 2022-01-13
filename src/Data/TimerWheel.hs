@@ -1,6 +1,4 @@
 {-# LANGUAGE RecursiveDo #-}
-{-# LANGUAGE StrictData #-}
-{-# OPTIONS_GHC -funbox-strict-fields #-}
 
 -- | A simple, hashed timer wheel.
 module Data.TimerWheel
@@ -88,10 +86,10 @@ import qualified Data.TimerWheel.Internal.Wheel as Wheel
 -- @
 data TimerWheel = TimerWheel
   { -- | A supply of unique ints.
-    supply :: Supply,
+    supply :: {-# UNPACK #-} !Supply,
     -- | The array of collections of timers.
-    wheel :: Wheel,
-    thread :: ThreadId
+    wheel :: {-# UNPACK #-} !Wheel,
+    thread :: {-# UNPACK #-} !ThreadId
   }
 
 -- | The timeout thread died.

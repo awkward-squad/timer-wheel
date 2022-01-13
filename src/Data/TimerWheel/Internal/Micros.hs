@@ -1,5 +1,3 @@
-{-# LANGUAGE TypeApplications #-}
-
 module Data.TimerWheel.Internal.Micros
   ( Micros (..),
     fromFixed,

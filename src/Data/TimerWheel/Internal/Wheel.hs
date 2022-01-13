@@ -1,5 +1,3 @@
-{-# LANGUAGE StrictData #-}
-
 module Data.TimerWheel.Internal.Wheel
   ( Wheel (resolution),
     create,
@@ -21,8 +19,8 @@ import Data.Vector (Vector)
 import qualified Data.Vector as Vector
 
 data Wheel = Wheel
-  { buckets :: Vector (IORef Entries),
-    resolution :: Micros
+  { buckets :: {-# UNPACK #-} !(Vector (IORef Entries)),
+    resolution :: {-# UNPACK #-} !Micros
   }
 
 create :: Int -> Micros -> IO Wheel

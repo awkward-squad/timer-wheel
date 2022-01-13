@@ -1,5 +1,3 @@
-{-# LANGUAGE TypeApplications #-}
-
 module Data.TimerWheel.Internal.Entries
   ( Entries,
     empty,
