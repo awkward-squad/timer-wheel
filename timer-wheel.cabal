@@ -17,7 +17,7 @@ author: Mitchell Rosen
 maintainer: Mitchell Rosen <mitchellwrosen@gmail.com>
 homepage: https://github.com/mitchellwrosen/timer-wheel
 bug-reports: https://github.com/mitchellwrosen/timer-wheel/issues
-copyright: (c) 2018-2020, Mitchell Rosen
+copyright: (c) 2018-2022, Mitchell Rosen
 license: BSD3
 license-file: LICENSE
 build-type: Simple
