@@ -1,5 +1,7 @@
-## [0.3.1] - Unreleased
+## [0.4.0] - 2022-11-05
 
+- Add `create`
+- Rename `Data.TimerWheel` to `TimerWheel`
 - Swap out `vector` for `array`
 - Treat negative delays as 0
 - Drop support for GHC < 8.6

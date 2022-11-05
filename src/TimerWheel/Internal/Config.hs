@@ -1,4 +1,4 @@
-module Data.TimerWheel.Internal.Config
+module TimerWheel.Internal.Config
   ( Config (..),
   )
 where

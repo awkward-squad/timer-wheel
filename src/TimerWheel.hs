@@ -1,9 +1,10 @@
 {-# LANGUAGE RecursiveDo #-}
 
 -- | A simple, hashed timer wheel.
-module Data.TimerWheel
+module TimerWheel
   ( -- * Timer wheel
     TimerWheel,
+    create,
     with,
     Config (..),
     register,
@@ -13,19 +14,22 @@ module Data.TimerWheel
   )
 where
 
+import Control.Exception (throwIO)
+import Control.Monad (when)
 import Data.Bool (bool)
 import Data.Fixed (E6, Fixed)
 import Data.Function (fix)
 import Data.IORef (newIORef, readIORef, writeIORef)
-import Data.TimerWheel.Internal.Config (Config)
-import qualified Data.TimerWheel.Internal.Config as Config
-import Data.TimerWheel.Internal.Micros (Micros (Micros))
-import qualified Data.TimerWheel.Internal.Micros as Micros
-import Data.TimerWheel.Internal.Supply (Supply)
-import qualified Data.TimerWheel.Internal.Supply as Supply
-import Data.TimerWheel.Internal.Wheel (Wheel)
-import qualified Data.TimerWheel.Internal.Wheel as Wheel
+import GHC.Exception (errorCallException)
 import qualified Ki
+import TimerWheel.Internal.Config (Config)
+import qualified TimerWheel.Internal.Config as Config
+import TimerWheel.Internal.Micros (Micros (Micros))
+import qualified TimerWheel.Internal.Micros as Micros
+import TimerWheel.Internal.Supply (Supply)
+import qualified TimerWheel.Internal.Supply as Supply
+import TimerWheel.Internal.Wheel (Wheel)
+import qualified TimerWheel.Internal.Wheel as Wheel
 
 -- | A timer wheel is a vector-of-collections-of timers to fire. It is configured with a /spoke count/ and /resolution/.
 -- Timers may be scheduled arbitrarily far in the future. A timeout thread is spawned to step through the timer wheel
@@ -90,6 +94,19 @@ data TimerWheel = TimerWheel
     -- thread :: {-# UNPACK #-} !ThreadId
   }
 
+-- | Create a timer wheel in a scope.
+--
+-- /Throws./
+--
+--   * Calls 'error' if the config is invalid
+create :: Ki.Scope -> Config -> IO TimerWheel
+create scope config = do
+  validateConfig config
+  wheel <- Wheel.create (Config.spokes config) (Micros.fromFixed (Config.resolution config))
+  supply <- Supply.new
+  Ki.fork_ scope (Wheel.reap wheel)
+  pure TimerWheel {supply, wheel}
+
 -- | Perform an action with a timer wheel.
 --
 -- /Throws./
@@ -99,22 +116,14 @@ data TimerWheel = TimerWheel
 --   * Throws the exception the timer wheel thread throws, if any
 with :: Config -> (TimerWheel -> IO a) -> IO a
 with config action =
-  case validateConfig config of
-    () -> withImpl config action
-
-withImpl :: Config -> (TimerWheel -> IO a) -> IO a
-withImpl config action = do
-  wheel <- Wheel.create (Config.spokes config) (Micros.fromFixed (Config.resolution config))
-  supply <- Supply.new
   Ki.scoped \scope -> do
-    Ki.fork_ scope (Wheel.reap wheel)
-    action TimerWheel {supply, wheel}
+    wheel <- create scope config
+    action wheel
 
-validateConfig :: Config -> ()
+validateConfig :: Config -> IO ()
 validateConfig config =
-  if Config.spokes config <= 0 || Config.resolution config <= 0
-    then error ("[timer-wheel] invalid config: " ++ show config)
-    else ()
+  when (Config.spokes config <= 0 || Config.resolution config <= 0) do
+    throwIO (errorCallException ("timer-wheel: invalid config: " ++ show config))
 
 -- | @register wheel delay action@ registers an action __@action@__ in timer wheel __@wheel@__ to fire after __@delay@__
 -- seconds.

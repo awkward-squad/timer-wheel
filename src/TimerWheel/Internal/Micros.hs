@@ -1,8 +1,8 @@
-module Data.TimerWheel.Internal.Micros
+module TimerWheel.Internal.Micros
   ( Micros (..),
     fromFixed,
     fromSeconds,
-    Data.TimerWheel.Internal.Micros.div,
+    TimerWheel.Internal.Micros.div,
     minus,
     scale,
     sleep,

@@ -1,7 +1,7 @@
-module Data.TimerWheel.Internal.Entries
+module TimerWheel.Internal.Entries
   ( Entries,
     empty,
-    Data.TimerWheel.Internal.Entries.null,
+    TimerWheel.Internal.Entries.null,
     size,
     insert,
     delete,

@@ -1,4 +1,4 @@
-module Data.TimerWheel.Internal.Wheel
+module TimerWheel.Internal.Wheel
   ( Wheel (resolution),
     create,
     lenMicros,
@@ -11,12 +11,12 @@ import Control.Monad (join, replicateM, when)
 import Data.Array (Array)
 import qualified Data.Array as Array
 import Data.IORef
-import Data.TimerWheel.Internal.Entries (Entries)
-import qualified Data.TimerWheel.Internal.Entries as Entries
-import Data.TimerWheel.Internal.Micros (Micros (..))
-import qualified Data.TimerWheel.Internal.Micros as Micros
-import Data.TimerWheel.Internal.Timestamp (Timestamp)
-import qualified Data.TimerWheel.Internal.Timestamp as Timestamp
+import TimerWheel.Internal.Entries (Entries)
+import qualified TimerWheel.Internal.Entries as Entries
+import TimerWheel.Internal.Micros (Micros (..))
+import qualified TimerWheel.Internal.Micros as Micros
+import TimerWheel.Internal.Timestamp (Timestamp)
+import qualified TimerWheel.Internal.Timestamp as Timestamp
 
 data Wheel = Wheel
   { buckets :: {-# UNPACK #-} !(Array Int (IORef Entries)),
