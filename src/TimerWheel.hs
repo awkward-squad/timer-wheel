@@ -158,7 +158,7 @@ registerImpl TimerWheel {supply, wheel} delay action = do
   Wheel.insert wheel key delay action
 
 -- | @recurring wheel action delay@ registers an action __@action@__ in timer wheel __@wheel@__ to fire every
--- __@delay@__ seconds (or every /resolution/ seconds, whichever is smaller).
+-- __@delay@__ seconds.
 --
 -- Returns an action that, when called, cancels the recurring timer.
 recurring ::
