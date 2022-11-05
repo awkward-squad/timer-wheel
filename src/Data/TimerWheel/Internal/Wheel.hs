@@ -7,7 +7,9 @@ module Data.TimerWheel.Internal.Wheel
   )
 where
 
-import Control.Monad (join, when)
+import Control.Monad (join, replicateM, when)
+import Data.Array (Array)
+import qualified Data.Array as Array
 import Data.IORef
 import Data.TimerWheel.Internal.Entries (Entries)
 import qualified Data.TimerWheel.Internal.Entries as Entries
@@ -15,22 +17,21 @@ import Data.TimerWheel.Internal.Micros (Micros (..))
 import qualified Data.TimerWheel.Internal.Micros as Micros
 import Data.TimerWheel.Internal.Timestamp (Timestamp)
 import qualified Data.TimerWheel.Internal.Timestamp as Timestamp
-import Data.Vector (Vector)
-import qualified Data.Vector as Vector
 
 data Wheel = Wheel
-  { buckets :: {-# UNPACK #-} !(Vector (IORef Entries)),
+  { buckets :: {-# UNPACK #-} !(Array Int (IORef Entries)),
     resolution :: {-# UNPACK #-} !Micros
   }
 
 create :: Int -> Micros -> IO Wheel
 create spokes resolution = do
-  buckets <- Vector.replicateM spokes (newIORef Entries.empty)
+  refs <- replicateM spokes (newIORef Entries.empty)
+  let buckets = Array.listArray (0, spokes - 1) refs
   pure Wheel {buckets, resolution}
 
 numSpokes :: Wheel -> Int
 numSpokes wheel =
-  Vector.length (buckets wheel)
+  length (buckets wheel)
 
 lenMicros :: Wheel -> Micros
 lenMicros wheel =
@@ -38,7 +39,7 @@ lenMicros wheel =
 
 bucket :: Wheel -> Timestamp -> IORef Entries
 bucket wheel timestamp =
-  Vector.unsafeIndex (buckets wheel) (index wheel timestamp)
+  buckets wheel Array.! index wheel timestamp
 
 index :: Wheel -> Timestamp -> Int
 index wheel@Wheel {resolution} timestamp =
@@ -71,7 +72,7 @@ reap wheel@Wheel {buckets, resolution} = do
   where
     loop :: Timestamp -> Int -> IO ()
     loop nextTime i = do
-      join (atomicModifyIORef' (Vector.unsafeIndex buckets i) expire)
+      join (atomicModifyIORef' (buckets Array.! i) expire)
       afterTime <- Timestamp.now
       when (afterTime < nextTime) (Micros.sleep (nextTime `Timestamp.minus` afterTime))
       loop (nextTime `Timestamp.plus` resolution) ((i + 1) `rem` numSpokes wheel)
