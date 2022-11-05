@@ -37,6 +37,7 @@ library
     array ^>= 0.5.2.0,
     atomic-primops ^>= 0.8,
     base ^>= 4.12 || ^>= 4.13 || ^>= 4.14 || ^>= 4.15 || ^>= 4.16 || ^>= 4.17,
+    ki ^>= 1.0.0,
     psqueues ^>= 0.2.7
 
   default-extensions:

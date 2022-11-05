@@ -63,14 +63,14 @@ insert wheel key delay action = do
     insertEntry =
       Entries.insert key (unMicros (delay `Micros.div` lenMicros wheel)) action
 
-reap :: Wheel -> IO ()
+reap :: Wheel -> IO a
 reap wheel@Wheel {buckets, resolution} = do
   now <- Timestamp.now
   let remainingBucketMicros = resolution `Micros.minus` (now `Timestamp.rem` resolution)
   Micros.sleep remainingBucketMicros
   loop (now `Timestamp.plus` remainingBucketMicros `Timestamp.plus` resolution) (index wheel now)
   where
-    loop :: Timestamp -> Int -> IO ()
+    loop :: Timestamp -> Int -> IO a
     loop nextTime i = do
       join (atomicModifyIORef' (buckets Array.! i) expire)
       afterTime <- Timestamp.now

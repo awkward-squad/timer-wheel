@@ -13,8 +13,6 @@ module Data.TimerWheel
   )
 where
 
-import Control.Concurrent
-import Control.Exception
 import Data.Bool (bool)
 import Data.Fixed (E6, Fixed)
 import Data.Function (fix)
@@ -27,6 +25,7 @@ import Data.TimerWheel.Internal.Supply (Supply)
 import qualified Data.TimerWheel.Internal.Supply as Supply
 import Data.TimerWheel.Internal.Wheel (Wheel)
 import qualified Data.TimerWheel.Internal.Wheel as Wheel
+import qualified Ki
 
 -- | A timer wheel is a vector-of-collections-of timers to fire. It is configured with a /spoke count/ and /resolution/.
 -- Timers may be scheduled arbitrarily far in the future. A timeout thread is spawned to step through the timer wheel
@@ -87,18 +86,9 @@ data TimerWheel = TimerWheel
   { -- | A supply of unique ints.
     supply :: {-# UNPACK #-} !Supply,
     -- | The array of collections of timers.
-    wheel :: {-# UNPACK #-} !Wheel,
-    thread :: {-# UNPACK #-} !ThreadId
+    wheel :: {-# UNPACK #-} !Wheel
+    -- thread :: {-# UNPACK #-} !ThreadId
   }
-
--- | The timeout thread died.
-newtype TimerWheelDied
-  = TimerWheelDied SomeException
-  deriving stock (Show)
-
-instance Exception TimerWheelDied where
-  toException = asyncExceptionToException
-  fromException = asyncExceptionFromException
 
 -- | Perform an action with a timer wheel.
 --
@@ -116,22 +106,9 @@ withImpl :: Config -> (TimerWheel -> IO a) -> IO a
 withImpl config action = do
   wheel <- Wheel.create (Config.spokes config) (Micros.fromFixed (Config.resolution config))
   supply <- Supply.new
-  parentThread <- myThreadId
-  uninterruptibleMask \restore -> do
-    thread <-
-      forkIOWithUnmask \unmask ->
-        unmask (Wheel.reap wheel) `catch` \e ->
-          case fromException e of
-            Just ThreadKilled -> pure ()
-            _ -> throwTo parentThread (TimerWheelDied e)
-    result <-
-      restore (action TimerWheel {supply, wheel, thread}) `catch` \ex -> do
-        killThread thread
-        case fromException ex of
-          Just (TimerWheelDied ex') -> throwIO ex'
-          _ -> throwIO ex
-    killThread thread
-    pure result
+  Ki.scoped \scope -> do
+    Ki.fork_ scope (Wheel.reap wheel)
+    action TimerWheel {supply, wheel}
 
 validateConfig :: Config -> ()
 validateConfig config =
