@@ -1,6 +1,7 @@
-## [0.3.0.1] - Unreleased
+## [0.3.1] - Unreleased
 
 - Swap out `vector` for `array`
+- Treat negative delays as 0
 - Drop support for GHC < 8.6
 
 ## [0.3.0] - 2020-06-18

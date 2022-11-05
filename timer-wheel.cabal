@@ -1,7 +1,7 @@
 cabal-version: 2.0
 
 name: timer-wheel
-version: 0.3.0.1
+version: 0.3.1
 category: Data
 description:
   This library provides a timer wheel data structure for

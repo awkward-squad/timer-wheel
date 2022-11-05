@@ -8,7 +8,7 @@ import GHC.Generics (Generic)
 
 -- | Timer wheel config.
 --
--- * @spokes@ must be ∈ @(0, maxBound]@
+-- * @spokes@ must be ∈ @[1, maxBound]@
 -- * @resolution@ must ∈ @(0, ∞]@
 data Config = Config
   { -- | Spoke count.

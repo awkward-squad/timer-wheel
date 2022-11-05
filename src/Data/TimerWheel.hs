@@ -144,10 +144,6 @@ validateConfig config =
 --
 -- Returns an action that, when called, attempts to cancel the timer, and returns whether or not it was successful
 -- (@False@ means the timer has already fired, or was already cancelled).
---
--- /Throws/.
---
---   * Calls 'error' if the given number of seconds is negative.
 register ::
   TimerWheel ->
   -- | Delay, in seconds
@@ -155,14 +151,10 @@ register ::
   -- | Action
   IO () ->
   IO (IO Bool)
-register wheel (Micros.fromSeconds -> delay) =
-  registerImpl wheel delay
+register wheel delay =
+  registerImpl wheel (Micros.fromSeconds (max 0 delay))
 
 -- | Like 'register', but for when you don't intend to cancel the timer.
---
--- /Throws/.
---
---   * Calls 'error' if the given number of seconds is negative.
 register_ ::
   TimerWheel ->
   -- | Delay, in seconds
@@ -183,10 +175,6 @@ registerImpl TimerWheel {supply, wheel} delay action = do
 -- __@delay@__ seconds (or every /resolution/ seconds, whichever is smaller).
 --
 -- Returns an action that, when called, cancels the recurring timer.
---
--- /Throws/.
---
---   * Calls 'error' if the given number of seconds is negative.
 recurring ::
   TimerWheel ->
   -- | Delay, in seconds
@@ -208,10 +196,6 @@ recurring wheel (Micros.fromSeconds -> delay) action = mdo
       cancel
 
 -- | Like 'recurring', but for when you don't intend to cancel the timer.
---
--- /Throws/.
---
---   * Calls 'error' if the given number of seconds is negative.
 recurring_ ::
   TimerWheel ->
   -- | Delay, in seconds
