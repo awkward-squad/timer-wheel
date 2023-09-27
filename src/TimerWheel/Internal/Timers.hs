@@ -10,6 +10,7 @@ import Control.Monad (when)
 import qualified Data.Atomics as Atomics
 import Data.Primitive.Array (MutableArray)
 import qualified Data.Primitive.Array as Array
+import Data.Word (Word64)
 import GHC.Base (RealWorld)
 import TimerWheel.Internal.Entries (Entries)
 import qualified TimerWheel.Internal.Entries as Entries
@@ -20,39 +21,41 @@ import qualified TimerWheel.Internal.Timestamp as Timestamp
 
 data Timers = Timers
   { buckets :: {-# UNPACK #-} !(MutableArray RealWorld Entries),
-    resolution :: {-# UNPACK #-} !Micros
+    resolution :: {-# UNPACK #-} !Micros,
+    -- The total number of microseconds that one trip 'round the wheel represents. This value is needed whenever a new
+    -- timer is inserted, so we cache it, though this doesn't really show up on any benchmark we've put together heh
+    totalMicros :: {-# UNPACK #-} !Micros
   }
 
 create :: Int -> Micros -> IO Timers
 create spokes resolution = do
   buckets <- Array.newArray spokes Entries.empty
-  pure Timers {buckets, resolution}
+  pure Timers {buckets, resolution, totalMicros}
+  where
+    totalMicros = Micros.scale spokes resolution
 
-numSpokes :: Timers -> Int
-numSpokes Timers {buckets} =
-  Array.sizeofMutableArray buckets
-
-lenMicros :: Timers -> Micros
-lenMicros timers =
-  Micros.scale (numSpokes timers) (resolution timers)
-
-timestampToIndex :: Timers -> Timestamp -> Int
-timestampToIndex timers@Timers {resolution} timestamp =
-  fromIntegral (Timestamp.epoch resolution timestamp) `rem` numSpokes timers
+timestampToIndex :: MutableArray RealWorld Entries -> Micros -> Timestamp -> Int
+timestampToIndex buckets resolution timestamp =
+  -- This downcast is safe because there are at most `maxBound :: Int` buckets (not that anyone would ever have that
+  -- many...)
+  fromIntegral @Word64 @Int
+    (Timestamp.epoch resolution timestamp `rem` fromIntegral @Int @Word64 (Array.sizeofMutableArray buckets))
 
 insert :: Timers -> Int -> Micros -> IO () -> IO (IO Bool)
-insert timers@Timers {buckets} key delay action = do
+insert timers@Timers {buckets, resolution} key delay action = do
   now <- Timestamp.now
-  let index = timestampToIndex timers (now `Timestamp.plus` delay)
+  let index = timestampToIndex buckets resolution (now `Timestamp.plus` delay)
   atomicInsertIntoBucket timers index key delay action
   pure (atomicDeleteFromBucket buckets index key)
 
 reap :: Timers -> IO a
-reap timers@Timers {buckets, resolution} = do
+reap Timers {buckets, resolution} = do
   now <- Timestamp.now
   let remainingBucketMicros = resolution `Micros.minus` (now `Timestamp.rem` resolution)
   Micros.sleep remainingBucketMicros
-  loop (now `Timestamp.plus` remainingBucketMicros `Timestamp.plus` resolution) (timestampToIndex timers now)
+  loop
+    (now `Timestamp.plus` remainingBucketMicros `Timestamp.plus` resolution)
+    (timestampToIndex buckets resolution now)
   where
     loop :: Timestamp -> Int -> IO a
     loop nextTime index = do
@@ -60,13 +63,13 @@ reap timers@Timers {buckets, resolution} = do
       sequence_ expired
       afterTime <- Timestamp.now
       when (afterTime < nextTime) (Micros.sleep (nextTime `Timestamp.minus` afterTime))
-      loop (nextTime `Timestamp.plus` resolution) ((index + 1) `rem` numSpokes timers)
+      loop (nextTime `Timestamp.plus` resolution) ((index + 1) `rem` Array.sizeofMutableArray buckets)
 
 ------------------------------------------------------------------------------------------------------------------------
 -- Atomic operations on buckets
 
 atomicInsertIntoBucket :: Timers -> Int -> Int -> Micros -> IO () -> IO ()
-atomicInsertIntoBucket timers@Timers {buckets} index key delay action = do
+atomicInsertIntoBucket Timers {buckets, totalMicros} index key delay action = do
   ticket0 <- Atomics.readArrayElem buckets index
   loop ticket0
   where
@@ -76,7 +79,7 @@ atomicInsertIntoBucket timers@Timers {buckets} index key delay action = do
 
     doInsert :: Entries -> Entries
     doInsert =
-      Entries.insert key (unMicros (delay `Micros.div` lenMicros timers)) action
+      Entries.insert key (unMicros (delay `Micros.div` totalMicros)) action
 
 atomicDeleteFromBucket :: MutableArray RealWorld Entries -> Int -> Int -> IO Bool
 atomicDeleteFromBucket buckets index key = do
