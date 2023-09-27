@@ -14,16 +14,12 @@ module TimerWheel
   )
 where
 
-import Control.Exception (throwIO)
-import Control.Monad (when)
 import Data.Bool (bool)
 import Data.Fixed (E6, Fixed)
 import Data.Function (fix)
 import Data.IORef (newIORef, readIORef, writeIORef)
-import GHC.Exception (errorCallException)
 import qualified Ki
-import TimerWheel.Internal.Config (Config)
-import qualified TimerWheel.Internal.Config as Config
+import TimerWheel.Internal.Config (Config (..))
 import TimerWheel.Internal.Counter (Counter, incrCounter, newCounter)
 import TimerWheel.Internal.Micros (Micros (Micros))
 import qualified TimerWheel.Internal.Micros as Micros
@@ -93,14 +89,12 @@ data TimerWheel = TimerWheel
   }
 
 -- | Create a timer wheel in a scope.
---
--- /Throws./
---
---   * Calls 'error' if the config is invalid
 create :: Ki.Scope -> Config -> IO TimerWheel
-create scope config = do
-  validateConfig config
-  wheel <- Wheel.create (Config.spokes config) (Micros.fromFixed (Config.resolution config))
+create scope Config {spokes, resolution} = do
+  wheel <-
+    Wheel.create
+      (if spokes <= 0 then 1024 else spokes)
+      (Micros.fromFixed (if resolution <= 0 then 1 else resolution))
   counter <- newCounter
   Ki.fork_ scope (Wheel.reap wheel)
   pure TimerWheel {counter, wheel}
@@ -109,7 +103,6 @@ create scope config = do
 --
 -- /Throws./
 --
---   * Calls 'error' if the config is invalid
 --   * Throws the exception the given action throws, if any
 --   * Throws the exception the timer wheel thread throws, if any
 with :: Config -> (TimerWheel -> IO a) -> IO a
@@ -117,11 +110,6 @@ with config action =
   Ki.scoped \scope -> do
     wheel <- create scope config
     action wheel
-
-validateConfig :: Config -> IO ()
-validateConfig config =
-  when (Config.spokes config <= 0 || Config.resolution config <= 0) do
-    throwIO (errorCallException ("timer-wheel: invalid config: " ++ show config))
 
 -- | @register wheel delay action@ registers an action __@action@__ in timer wheel __@wheel@__ to fire after __@delay@__
 -- seconds.
@@ -214,10 +202,10 @@ reregister wheel delay =
   where
     reso :: Micros
     reso =
-      resolution wheel
+      wheelResolution wheel
 
-resolution :: TimerWheel -> Micros
-resolution =
+wheelResolution :: TimerWheel -> Micros
+wheelResolution =
   Wheel.resolution . wheel
 
 -- Repeat an IO action until it returns 'True'.
