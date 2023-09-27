@@ -33,13 +33,9 @@ source-repository head
   type: git
   location: git://github.com/awkward-squad/timer-wheel.git
 
-library
+common component
   build-depends:
     base ^>= 4.12 || ^>= 4.13 || ^>= 4.14 || ^>= 4.15 || ^>= 4.16 || ^>= 4.17 || ^>= 4.18,
-    ki ^>= 1.0.0,
-    primitive ^>= 0.7 || ^>= 0.8,
-    psqueues ^>= 0.2.7,
-
   default-extensions:
     BangPatterns
     BlockArguments
@@ -54,13 +50,7 @@ library
     TupleSections
     TypeApplications
     ViewPatterns
-
-  default-language:
-    Haskell2010
-
-  exposed-modules:
-    TimerWheel
-
+  default-language: Haskell2010
   ghc-options:
     -Weverything
     -Wno-all-missed-specialisations
@@ -75,9 +65,15 @@ library
     ghc-options:
       -Wno-missing-kind-signatures
 
-  hs-source-dirs:
-    src
-
+library
+  import: component
+  build-depends:
+    ki ^>= 1.0.0,
+    primitive ^>= 0.7 || ^>= 0.8,
+    psqueues ^>= 0.2.7,
+  exposed-modules:
+    TimerWheel
+  hs-source-dirs: src
   other-modules:
     TimerWheel.Internal.Config
     TimerWheel.Internal.Counter
@@ -87,23 +83,31 @@ library
     TimerWheel.Internal.Timestamp
 
 test-suite tests
+  import: component
   build-depends:
-    base,
-    timer-wheel
+    timer-wheel,
+  ghc-options: -threaded -with-rtsopts=-N2
+  hs-source-dirs: test
+  main-is: Main.hs
+  type: exitcode-stdio-1.0
 
-  default-language:
-    Haskell2010
-
-  ghc-options:
-    -threaded
-    -with-rtsopts=-N2
-    -Wall
-
-  hs-source-dirs:
-    test
-
-  main-is:
-    Main.hs
-
-  type:
-    exitcode-stdio-1.0
+benchmark bench
+  import: component
+  build-depends:
+    ki,
+    primitive,
+    psqueues,
+    random ^>= 1.2,
+    tasty-bench,
+  ghc-options: -O
+  hs-source-dirs: bench, src
+  main-is: Main.hs
+  other-modules:
+    TimerWheel
+    TimerWheel.Internal.Config
+    TimerWheel.Internal.Counter
+    TimerWheel.Internal.Entries
+    TimerWheel.Internal.Micros
+    TimerWheel.Internal.Timers
+    TimerWheel.Internal.Timestamp
+  type: exitcode-stdio-1.0

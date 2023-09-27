@@ -24,7 +24,7 @@ fromFixed =
 
 fromSeconds :: Fixed E6 -> Micros
 fromSeconds seconds@(MkFixed micros)
-  | micros < 0 = error ("[timer-wheel] invalid seconds: " ++ show seconds)
+  | micros < 0 = error ("timer-wheel: invalid seconds: " ++ show seconds)
   | otherwise = Micros (fromIntegral micros)
 
 div :: Micros -> Micros -> Micros
