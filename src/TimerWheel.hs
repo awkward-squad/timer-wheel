@@ -23,8 +23,8 @@ import TimerWheel.Internal.Config (Config (..))
 import TimerWheel.Internal.Counter (Counter, incrCounter, newCounter)
 import TimerWheel.Internal.Micros (Micros (Micros))
 import qualified TimerWheel.Internal.Micros as Micros
-import TimerWheel.Internal.Wheel (Wheel)
-import qualified TimerWheel.Internal.Wheel as Wheel
+import TimerWheel.Internal.Timers (Timers)
+import qualified TimerWheel.Internal.Timers as Timers
 
 -- | A timer wheel is a vector-of-collections-of timers to fire. It is configured with a /spoke count/ and /resolution/.
 -- Timers may be scheduled arbitrarily far in the future. A timeout thread is spawned to step through the timer wheel
@@ -85,19 +85,19 @@ data TimerWheel = TimerWheel
   { -- A counter, to generate unique ints that identify registered actions.
     counter :: {-# UNPACK #-} !Counter,
     -- The array of collections of timers.
-    wheel :: {-# UNPACK #-} !Wheel
+    timers :: {-# UNPACK #-} !Timers
   }
 
 -- | Create a timer wheel in a scope.
 create :: Ki.Scope -> Config -> IO TimerWheel
 create scope Config {spokes, resolution} = do
-  wheel <-
-    Wheel.create
+  counter <- newCounter
+  timers <-
+    Timers.create
       (if spokes <= 0 then 1024 else spokes)
       (Micros.fromFixed (if resolution <= 0 then 1 else resolution))
-  counter <- newCounter
-  Ki.fork_ scope (Wheel.reap wheel)
-  pure TimerWheel {counter, wheel}
+  Ki.fork_ scope (Timers.reap timers)
+  pure TimerWheel {counter, timers}
 
 -- | Perform an action with a timer wheel.
 --
@@ -139,9 +139,9 @@ register_ wheel delay action = do
   pure ()
 
 registerImpl :: TimerWheel -> Micros -> IO () -> IO (IO Bool)
-registerImpl TimerWheel {counter, wheel} delay action = do
+registerImpl TimerWheel {counter, timers} delay action = do
   key <- incrCounter counter
-  Wheel.insert wheel key delay action
+  Timers.insert timers key delay action
 
 -- | @recurring wheel action delay@ registers an action __@action@__ in timer wheel __@wheel@__ to fire every
 -- __@delay@__ seconds.
@@ -197,16 +197,12 @@ recurring_ wheel (Micros.fromSeconds -> delay) action = do
 --      act as if it's still "one bucket ago" at the moment we re-register
 --      it.
 reregister :: TimerWheel -> Micros -> IO () -> IO (IO Bool)
-reregister wheel delay =
+reregister wheel@TimerWheel {timers} delay =
   registerImpl wheel (if reso > delay then Micros 0 else delay `Micros.minus` reso)
   where
     reso :: Micros
     reso =
-      wheelResolution wheel
-
-wheelResolution :: TimerWheel -> Micros
-wheelResolution =
-  Wheel.resolution . wheel
+      Timers.resolution timers
 
 -- Repeat an IO action until it returns 'True'.
 untilTrue :: IO Bool -> IO ()

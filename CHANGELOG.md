@@ -2,6 +2,7 @@
 
 - `create` / `with` will no longer throw an exception if given an invalid config; rather, the config's invalid values
   will be replaced with sensible defaults
+- Replace `array` with `primitive`
 - Remove `atomic-primops` dependency
 
 ## [0.4.0.1] - 2022-11-05
