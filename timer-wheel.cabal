@@ -11,14 +11,14 @@ description:
   * /O(1)/ canceling registered actions
   .
   It is similar to @TimerManager@ from @GHC.Event@, but supports recurring
-  timers, can scale to handle many more registered timers.
+  actions, and can scale to handle many more registered actions.
   .
 synopsis: A timer wheel
 author: Mitchell Rosen
-maintainer: Mitchell Rosen <mitchellwrosen@gmail.com>
-homepage: https://github.com/mitchellwrosen/timer-wheel
-bug-reports: https://github.com/mitchellwrosen/timer-wheel/issues
-copyright: (c) 2018-2023, Mitchell Rosen
+maintainer: Mitchell Rosen <mitchellwrosen@gmail.com>, Travis Staton <hello@travisstaton.com>
+homepage: https://github.com/awkward-squad/timer-wheel
+bug-reports: https://github.com/awkward-squad/timer-wheel/issues
+copyright: (c) 2018-2023 Mitchell Rosen, Travis Staton
 license: BSD3
 license-file: LICENSE
 build-type: Simple
@@ -31,7 +31,7 @@ extra-source-files:
 
 source-repository head
   type: git
-  location: git://github.com/mitchellwrosen/timer-wheel.git
+  location: git://github.com/awkward-squad/timer-wheel.git
 
 library
   build-depends:
