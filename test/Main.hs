@@ -68,11 +68,10 @@ main = do
           takeMVar var
           throwIO (userError "fail")
       )
-      ( \ex ->
-          case fromException ex of
-            Just Bye -> pure ()
-            _ -> throwIO ex
-      )
+      \ex ->
+        case fromException ex of
+          Just Bye -> pure ()
+          _ -> throwIO ex
 
 data Bye = Bye
   deriving stock (Show)

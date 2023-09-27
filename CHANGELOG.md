@@ -1,3 +1,7 @@
+## Unreleased
+
+- Remove `atomic-primops` dependency
+
 ## [0.4.0.1] - 2022-11-05
 
 - Fix inaccurate haddock on `recurring`

@@ -26,8 +26,7 @@ import TimerWheel.Internal.Config (Config)
 import qualified TimerWheel.Internal.Config as Config
 import TimerWheel.Internal.Micros (Micros (Micros))
 import qualified TimerWheel.Internal.Micros as Micros
-import TimerWheel.Internal.Supply (Supply)
-import qualified TimerWheel.Internal.Supply as Supply
+import TimerWheel.Internal.Supply (Counter, incrCounter, newCounter)
 import TimerWheel.Internal.Wheel (Wheel)
 import qualified TimerWheel.Internal.Wheel as Wheel
 
@@ -88,7 +87,7 @@ import qualified TimerWheel.Internal.Wheel as Wheel
 -- @
 data TimerWheel = TimerWheel
   { -- | A supply of unique ints.
-    supply :: {-# UNPACK #-} !Supply,
+    supply :: {-# UNPACK #-} !Counter,
     -- | The array of collections of timers.
     wheel :: {-# UNPACK #-} !Wheel
     -- thread :: {-# UNPACK #-} !ThreadId
@@ -103,7 +102,7 @@ create :: Ki.Scope -> Config -> IO TimerWheel
 create scope config = do
   validateConfig config
   wheel <- Wheel.create (Config.spokes config) (Micros.fromFixed (Config.resolution config))
-  supply <- Supply.new
+  supply <- newCounter
   Ki.fork_ scope (Wheel.reap wheel)
   pure TimerWheel {supply, wheel}
 
@@ -154,7 +153,7 @@ register_ wheel delay action = do
 
 registerImpl :: TimerWheel -> Micros -> IO () -> IO (IO Bool)
 registerImpl TimerWheel {supply, wheel} delay action = do
-  key <- Supply.next supply
+  key <- incrCounter supply
   Wheel.insert wheel key delay action
 
 -- | @recurring wheel action delay@ registers an action __@action@__ in timer wheel __@wheel@__ to fire every
