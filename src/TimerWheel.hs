@@ -24,9 +24,9 @@ import GHC.Exception (errorCallException)
 import qualified Ki
 import TimerWheel.Internal.Config (Config)
 import qualified TimerWheel.Internal.Config as Config
+import TimerWheel.Internal.Counter (Counter, incrCounter, newCounter)
 import TimerWheel.Internal.Micros (Micros (Micros))
 import qualified TimerWheel.Internal.Micros as Micros
-import TimerWheel.Internal.Supply (Counter, incrCounter, newCounter)
 import TimerWheel.Internal.Wheel (Wheel)
 import qualified TimerWheel.Internal.Wheel as Wheel
 
@@ -86,11 +86,10 @@ import qualified TimerWheel.Internal.Wheel as Wheel
 --                                   ↑
 -- @
 data TimerWheel = TimerWheel
-  { -- | A supply of unique ints.
-    supply :: {-# UNPACK #-} !Counter,
-    -- | The array of collections of timers.
+  { -- A counter, to generate unique ints that identify registered actions.
+    counter :: {-# UNPACK #-} !Counter,
+    -- The array of collections of timers.
     wheel :: {-# UNPACK #-} !Wheel
-    -- thread :: {-# UNPACK #-} !ThreadId
   }
 
 -- | Create a timer wheel in a scope.
@@ -102,9 +101,9 @@ create :: Ki.Scope -> Config -> IO TimerWheel
 create scope config = do
   validateConfig config
   wheel <- Wheel.create (Config.spokes config) (Micros.fromFixed (Config.resolution config))
-  supply <- newCounter
+  counter <- newCounter
   Ki.fork_ scope (Wheel.reap wheel)
-  pure TimerWheel {supply, wheel}
+  pure TimerWheel {counter, wheel}
 
 -- | Perform an action with a timer wheel.
 --
@@ -152,8 +151,8 @@ register_ wheel delay action = do
   pure ()
 
 registerImpl :: TimerWheel -> Micros -> IO () -> IO (IO Bool)
-registerImpl TimerWheel {supply, wheel} delay action = do
-  key <- incrCounter supply
+registerImpl TimerWheel {counter, wheel} delay action = do
+  key <- incrCounter counter
   Wheel.insert wheel key delay action
 
 -- | @recurring wheel action delay@ registers an action __@action@__ in timer wheel __@wheel@__ to fire every

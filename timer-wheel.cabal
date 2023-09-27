@@ -80,9 +80,9 @@ library
 
   other-modules:
     TimerWheel.Internal.Config
+    TimerWheel.Internal.Counter
     TimerWheel.Internal.Entries
     TimerWheel.Internal.Micros
-    TimerWheel.Internal.Supply
     TimerWheel.Internal.Timestamp
     TimerWheel.Internal.Wheel
 

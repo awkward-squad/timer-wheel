@@ -21,7 +21,7 @@
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE UnboxedTuples #-}
 
-module TimerWheel.Internal.Supply
+module TimerWheel.Internal.Counter
   ( Counter,
     newCounter,
     incrCounter,
