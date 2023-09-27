@@ -68,6 +68,7 @@ common component
 library
   import: component
   build-depends:
+    atomic-primops ^>= 0.8,
     ki ^>= 1.0.0,
     primitive ^>= 0.7 || ^>= 0.8,
     psqueues ^>= 0.2.7,
@@ -94,12 +95,13 @@ test-suite tests
 benchmark bench
   import: component
   build-depends:
+    atomic-primops,
     ki,
     primitive,
     psqueues,
     random ^>= 1.2,
     tasty-bench,
-  ghc-options: -O
+  ghc-options: -fproc-alignment=64 -O "-with-rtsopts=-T -A32m"
   hs-source-dirs: bench, src
   main-is: Main.hs
   other-modules:

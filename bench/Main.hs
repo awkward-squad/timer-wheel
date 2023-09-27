@@ -10,18 +10,16 @@ import qualified TimerWheel.Internal.Counter as Counter
 import qualified TimerWheel.Internal.Micros as Micros
 import qualified TimerWheel.Internal.Timers as Timers
 
--- Numbers from this random 2019 i9 macbook: insert 1M timers in 315-320ms
-
 main :: IO ()
 main = do
   let delays =
         Random.runStateGen_
           (Random.mkStdGen 0)
-          (replicateM 1000000 . Random.uniformRM (0 :: Word64, 1000000 * 60 * 5))
+          (replicateM 100000 . Random.uniformRM (0 :: Word64, 1000000 * 60 * 5))
   _ <- evaluate (sum delays)
 
   defaultMain
-    [ bench "insert 1M timers" (whnfIO (insertN (coerce @[Word64] @[Micros.Micros] delays)))
+    [ bench "insert" (whnfIO (insertN (coerce @[Word64] @[Micros.Micros] delays)))
     ]
 
 insertN :: [Micros.Micros] -> IO ()
