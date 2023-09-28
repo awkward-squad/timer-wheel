@@ -57,12 +57,7 @@ partition :: Entries -> ([IO ()], Entries)
 partition (Entries entries) =
   case IntPSQ.atMostView 0 entries of
     (expired, alive) ->
-      (map f expired, Entries (IntPSQ.unsafeMapMonotonic g alive))
-  where
-    f :: (Int, Word64, IO ()) -> IO ()
-    f (_, _, m) =
-      m
-    g :: Int -> Word64 -> IO () -> (Word64, IO ())
-    g _ n m =
-      (n - 1, m)
+      ( map (\(_, _, m) -> m) expired,
+        Entries (IntPSQ.unsafeMapMonotonic (\_ n m -> (n - 1, m)) alive)
+      )
 {-# INLINEABLE partition #-}

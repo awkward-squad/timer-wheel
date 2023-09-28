@@ -12,6 +12,7 @@ import GHC.Clock (getMonotonicTimeNSec)
 import TimerWheel.Internal.Micros (Micros (..))
 import TimerWheel.Internal.Prelude
 
+-- Monotonic time, in microseconds
 newtype Timestamp
   = Timestamp Word64
   deriving stock (Eq, Ord)

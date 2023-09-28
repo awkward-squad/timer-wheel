@@ -6,6 +6,7 @@
   replaced with sensible defaults
 - `recurring` / `recurring_` no longer throw an exception if given a negative delay
 - Replace `array` with `primitive`
+- Make calling `cancel` more than once on a recurring timer not enter an infinite loop
 - Slightly improve timer insert performance
 
 ## [0.4.0.1] - 2022-11-05
