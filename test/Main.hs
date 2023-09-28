@@ -73,6 +73,17 @@ main = do
           Just Bye -> pure ()
           _ -> throwIO ex
 
+  do
+    putStrLn "`count` seems to work"
+    with Config {spokes = 4, resolution = 0.05} \wheel -> do
+      let n = 10 :: Int
+      count wheel `is` (0 :: Int)
+      var <- newMVar () -- full mvar prevents reaper from making progress before we want it to
+      replicateM_ n (register wheel 0 (putMVar var ()))
+      count wheel `is` n
+      replicateM_ (n + 1) (takeMVar var)
+      count wheel `is` (0 :: Int)
+
 data Bye = Bye
   deriving stock (Show)
   deriving anyclass (Exception)

@@ -23,11 +23,12 @@ module TimerWheel
 where
 
 import qualified Data.Atomics as Atomics
+import Data.Foldable (for_)
 import Data.Primitive.Array (MutableArray)
 import qualified Data.Primitive.Array as Array
 import GHC.Base (RealWorld)
 import qualified Ki
-import TimerWheel.Internal.Counter (Counter, incrCounter, newCounter)
+import TimerWheel.Internal.Counter (Counter, decrCounter_, incrCounter, incrCounter_, newCounter, readCounter)
 import TimerWheel.Internal.Entries (Entries)
 import qualified TimerWheel.Internal.Entries as Entries
 import TimerWheel.Internal.Micros (Micros (..))
@@ -96,6 +97,7 @@ data TimerWheel = TimerWheel
     -- A counter to generate unique ints that identify registered actions, so they can be canceled.
     counter :: {-# UNPACK #-} !Counter,
     resolution :: {-# UNPACK #-} !Micros,
+    numTimers :: {-# UNPACK #-} !Counter,
     -- The total number of microseconds that one trip 'round the wheel represents. This value is needed whenever a new
     -- timer is inserted, so we cache it, though this doesn't really show up on any benchmark we've put together heh
     totalMicros :: {-# UNPACK #-} !Micros
@@ -118,8 +120,9 @@ create :: Ki.Scope -> Config -> IO TimerWheel
 create scope (Config spokes0 resolution0) = do
   buckets <- Array.newArray spokes Entries.empty
   counter <- newCounter
-  Ki.fork_ scope (runTimerReaperThread buckets resolution)
-  pure TimerWheel {buckets, counter, resolution, totalMicros}
+  numTimers <- newCounter
+  Ki.fork_ scope (runTimerReaperThread buckets numTimers resolution)
+  pure TimerWheel {buckets, counter, numTimers, resolution, totalMicros}
   where
     spokes = if spokes0 <= 0 then 1024 else spokes0
     resolution = Micros.fromNonNegativeSeconds (if resolution0 <= 0 then 1 else resolution0)
@@ -163,8 +166,9 @@ register_ wheel delay action = do
   pure ()
 
 registerImpl :: TimerWheel -> Micros -> IO () -> IO (IO Bool)
-registerImpl TimerWheel {buckets, counter, resolution, totalMicros} delay action = do
+registerImpl TimerWheel {buckets, counter, numTimers, resolution, totalMicros} delay action = do
   now <- Timestamp.now
+  incrCounter_ numTimers
   key <- incrCounter counter
   let index = timestampToIndex buckets resolution (now `Timestamp.plus` delay)
   atomicInsertIntoBucket buckets totalMicros index key delay action
@@ -258,17 +262,10 @@ reregister wheel@TimerWheel {resolution} delay =
 
 -- | Get the approximate timer count in a timer wheel.
 --
--- /O(n)/, where /n/ is the number of timers registered.
+-- /O(1)/.
 count :: TimerWheel -> IO Int
-count TimerWheel {buckets} =
-  go 0 0
-  where
-    go :: Int -> Int -> IO Int
-    go !acc !i
-      | i == Array.sizeofMutableArray buckets = pure acc
-      | otherwise = do
-          entries <- Array.readArray buckets i
-          go (acc + Entries.size entries) (i + 1)
+count TimerWheel {numTimers} =
+  readCounter numTimers
 
 timestampToIndex :: MutableArray RealWorld Entries -> Micros -> Timestamp -> Int
 timestampToIndex buckets resolution timestamp =
@@ -322,8 +319,8 @@ atomicExtractExpiredTimersFromBucket buckets index = do
 ------------------------------------------------------------------------------------------------------------------------
 -- Timer reaper thread
 
-runTimerReaperThread :: MutableArray RealWorld Entries -> Micros -> IO void
-runTimerReaperThread buckets resolution = do
+runTimerReaperThread :: MutableArray RealWorld Entries -> Counter -> Micros -> IO void
+runTimerReaperThread buckets numTimers resolution = do
   now <- Timestamp.now
   let remainingBucketMicros = resolution `Micros.minus` (now `Timestamp.rem` resolution)
   Micros.sleep remainingBucketMicros
@@ -334,7 +331,9 @@ runTimerReaperThread buckets resolution = do
     loop :: Timestamp -> Int -> IO a
     loop !nextTime !index = do
       expired <- atomicExtractExpiredTimersFromBucket buckets index
-      sequence_ expired
+      for_ expired \action -> do
+        action
+        decrCounter_ numTimers
       afterTime <- Timestamp.now
       when (afterTime < nextTime) (Micros.sleep (nextTime `Timestamp.minus` afterTime))
       loop (nextTime `Timestamp.plus` resolution) ((index + 1) `rem` Array.sizeofMutableArray buckets)

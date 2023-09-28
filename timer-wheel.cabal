@@ -95,20 +95,11 @@ test-suite tests
 -- benchmark bench
 --   import: component
 --   build-depends:
---     atomic-primops,
 --     ki,
---     primitive,
---     psqueues,
 --     random ^>= 1.2,
 --     tasty-bench,
---   ghc-options: -fproc-alignment=64 -O "-with-rtsopts=-T -A32m"
---   hs-source-dirs: bench, src
+--     timer-wheel,
+--   ghc-options: -fproc-alignment=64 -O -threaded "-with-rtsopts=-N2 -T -A32m"
+--   hs-source-dirs: bench
 --   main-is: Main.hs
---   other-modules:
---     TimerWheel
---     TimerWheel.Internal.Counter
---     TimerWheel.Internal.Entries
---     TimerWheel.Internal.Micros
---     TimerWheel.Internal.Prelude
---     TimerWheel.Internal.Timestamp
 --   type: exitcode-stdio-1.0
