@@ -223,6 +223,10 @@ recurring wheel (Micros.fromSeconds -> delay) action = do
   tryCancel0 <- registerImpl wheel delay doAction
   writeIORef tryCancelRef tryCancel0
 
+  -- Track whether or not this recurring timer has been canceled, so we don't enter an infinite loop if the user
+  -- accidentally calls cancel more than once.
+  canceledRef <- newIORef False
+
   -- Return an action that attempt to cancel the timer over and over until success. It's very unlikely that any given
   -- attempt to cancel doesn't succeed, but it's possible with this thread interleaving:
   --
@@ -230,12 +234,13 @@ recurring wheel (Micros.fromSeconds -> delay) action = do
   --   2. Reaper thread performs `doAction` to completion, which registers the next occurrence and performs the action.
   --   3. User thread calls `tryCancel`, observing that the associated action was already performed.
   let cancel = do
-        tryCancel <- readIORef tryCancelRef
-        tryCancel >>= \case
-          False -> cancel
-          -- Writing `pure False` here just allows bad user-code that calls `cancel` after it's returned `True` to
-          -- return `False` immediately (like a normal one-shot timer does), rather than busy loop to death.
-          True -> writeIORef tryCancelRef (pure False)
+        readIORef canceledRef >>= \case
+          True -> pure ()
+          False -> do
+            tryCancel <- readIORef tryCancelRef
+            tryCancel >>= \case
+              True -> writeIORef canceledRef True
+              False -> cancel
   pure cancel
 
 -- | Like 'recurring', but for when you don't intend to cancel the timer.

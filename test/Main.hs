@@ -33,7 +33,7 @@ main = do
       replicateM_ (n - length (filter id successes)) (takeMVar var)
 
   do
-    putStrLn "Successful `cancel` returns True (then False)"
+    putStrLn "Successful `cancel` returns True, then False"
     with Config {spokes = 4, resolution = 0.05} \wheel -> do
       cancel <- register wheel 1 (pure ())
       cancel `is` True
@@ -58,6 +58,14 @@ main = do
       cancel -- should drop reference canary after a GC
       performGC
       (isJust <$> deRefWeak weakCanary) `is` False
+
+  do
+    putStrLn "Calling the cancel action more than once on a recurring timer is ok"
+    with Config {spokes = 4, resolution = 0.05} \wheel -> do
+      cancel <- recurring wheel 1 (pure ())
+      cancel
+      -- At one time, this one would loop indefinitely :grimace:
+      cancel
 
   do
     putStrLn "`with` re-throws exception from background thread"
