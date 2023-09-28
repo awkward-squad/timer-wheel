@@ -94,14 +94,17 @@ import qualified TimerWheel.Internal.Timestamp as Timestamp
 -- @
 data TimerWheel = TimerWheel
   { buckets :: {-# UNPACK #-} !(MutableArray RealWorld Entries),
-    -- A counter to generate unique ints that identify registered actions, so they can be canceled.
-    counter :: {-# UNPACK #-} !Counter,
     resolution :: {-# UNPACK #-} !Micros,
     numTimers :: {-# UNPACK #-} !Counter,
+    -- A counter to generate unique ints that identify registered actions, so they can be canceled.
+    timerIdSupply :: {-# UNPACK #-} !Counter,
     -- The total number of microseconds that one trip 'round the wheel represents. This value is needed whenever a new
     -- timer is inserted, so we cache it, though this doesn't really show up on any benchmark we've put together heh
     totalMicros :: {-# UNPACK #-} !Micros
   }
+
+-- Internal type alias for readability
+type TimerId = Int
 
 -- | Timer wheel config.
 --
@@ -119,10 +122,10 @@ data Config = Config
 create :: Ki.Scope -> Config -> IO TimerWheel
 create scope (Config spokes0 resolution0) = do
   buckets <- Array.newArray spokes Entries.empty
-  counter <- newCounter
   numTimers <- newCounter
+  timerIdSupply <- newCounter
   Ki.fork_ scope (runTimerReaperThread buckets numTimers resolution)
-  pure TimerWheel {buckets, counter, numTimers, resolution, totalMicros}
+  pure TimerWheel {buckets, numTimers, resolution, timerIdSupply, totalMicros}
   where
     spokes = if spokes0 <= 0 then 1024 else spokes0
     resolution = Micros.fromNonNegativeSeconds (if resolution0 <= 0 then 1 else resolution0)
@@ -166,13 +169,13 @@ register_ wheel delay action = do
   pure ()
 
 registerImpl :: TimerWheel -> Micros -> IO () -> IO (IO Bool)
-registerImpl TimerWheel {buckets, counter, numTimers, resolution, totalMicros} delay action = do
+registerImpl TimerWheel {buckets, numTimers, resolution, timerIdSupply, totalMicros} delay action = do
   now <- Timestamp.now
   incrCounter_ numTimers
-  key <- incrCounter counter
+  timerId <- incrCounter timerIdSupply
   let index = timestampToIndex buckets resolution (now `Timestamp.plus` delay)
-  atomicInsertIntoBucket buckets totalMicros index key delay action
-  pure (atomicDeleteFromBucket buckets index key)
+  atomicInsertIntoBucket buckets totalMicros index timerId delay action
+  pure (atomicDeleteFromBucket buckets index timerId)
 
 -- | @recurring wheel action delay@ registers an action __@action@__ in timer wheel __@wheel@__ to fire every
 -- __@delay@__ seconds (but no more often than __@wheel@__'s /resolution/).
@@ -277,8 +280,8 @@ timestampToIndex buckets resolution timestamp =
 ------------------------------------------------------------------------------------------------------------------------
 -- Atomic operations on buckets
 
-atomicInsertIntoBucket :: MutableArray RealWorld Entries -> Micros -> Int -> Int -> Micros -> IO () -> IO ()
-atomicInsertIntoBucket buckets totalMicros index key delay action = do
+atomicInsertIntoBucket :: MutableArray RealWorld Entries -> Micros -> Int -> TimerId -> Micros -> IO () -> IO ()
+atomicInsertIntoBucket buckets totalMicros index timerId delay action = do
   ticket0 <- Atomics.readArrayElem buckets index
   loop ticket0
   where
@@ -288,15 +291,15 @@ atomicInsertIntoBucket buckets totalMicros index key delay action = do
 
     doInsert :: Entries -> Entries
     doInsert =
-      Entries.insert key (unMicros (delay `Micros.div` totalMicros)) action
+      Entries.insert timerId (unMicros (delay `Micros.div` totalMicros)) action
 
-atomicDeleteFromBucket :: MutableArray RealWorld Entries -> Int -> Int -> IO Bool
-atomicDeleteFromBucket buckets index key = do
+atomicDeleteFromBucket :: MutableArray RealWorld Entries -> Int -> TimerId -> IO Bool
+atomicDeleteFromBucket buckets index timerId = do
   ticket0 <- Atomics.readArrayElem buckets index
   loop ticket0
   where
     loop ticket =
-      case Entries.delete key (Atomics.peekTicket ticket) of
+      case Entries.delete timerId (Atomics.peekTicket ticket) of
         Nothing -> pure False
         Just entries1 -> do
           (success, ticket1) <- Atomics.casArrayElem buckets index ticket entries1
