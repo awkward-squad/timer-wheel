@@ -4,27 +4,37 @@
 module TimerWheel
   ( -- * Timer wheel
     TimerWheel,
+    Config (..),
+    Seconds,
+
+    -- ** Constructing a timer wheel
     create,
     with,
-    Config (..),
+
+    -- ** Registering timers
     register,
     register_,
     recurring,
     recurring_,
+
+    -- ** Querying a timer wheel
+    count,
   )
 where
 
-import Data.Bool (bool)
-import Data.Fixed (E6, Fixed)
-import Data.Function (fix)
-import Data.IORef (newIORef, readIORef, writeIORef)
+import qualified Data.Atomics as Atomics
+import Data.Primitive.Array (MutableArray)
+import qualified Data.Primitive.Array as Array
+import GHC.Base (RealWorld)
 import qualified Ki
-import TimerWheel.Internal.Config (Config (..))
 import TimerWheel.Internal.Counter (Counter, incrCounter, newCounter)
-import TimerWheel.Internal.Micros (Micros (Micros))
+import TimerWheel.Internal.Entries (Entries)
+import qualified TimerWheel.Internal.Entries as Entries
+import TimerWheel.Internal.Micros (Micros (..))
 import qualified TimerWheel.Internal.Micros as Micros
-import TimerWheel.Internal.Timers (Timers)
-import qualified TimerWheel.Internal.Timers as Timers
+import TimerWheel.Internal.Prelude
+import TimerWheel.Internal.Timestamp (Timestamp)
+import qualified TimerWheel.Internal.Timestamp as Timestamp
 
 -- | A timer wheel is a vector-of-collections-of timers to fire. It is configured with a /spoke count/ and /resolution/.
 -- Timers may be scheduled arbitrarily far in the future. A timeout thread is spawned to step through the timer wheel
@@ -82,29 +92,40 @@ import qualified TimerWheel.Internal.Timers as Timers
 --                                   ↑
 -- @
 data TimerWheel = TimerWheel
-  { -- A counter, to generate unique ints that identify registered actions.
+  { buckets :: {-# UNPACK #-} !(MutableArray RealWorld Entries),
+    -- A counter to generate unique ints that identify registered actions, so they can be canceled.
     counter :: {-# UNPACK #-} !Counter,
-    -- The array of collections of timers.
-    timers :: {-# UNPACK #-} !Timers
+    resolution :: {-# UNPACK #-} !Micros,
+    -- The total number of microseconds that one trip 'round the wheel represents. This value is needed whenever a new
+    -- timer is inserted, so we cache it, though this doesn't really show up on any benchmark we've put together heh
+    totalMicros :: {-# UNPACK #-} !Micros
   }
+
+-- | Timer wheel config.
+--
+-- * @spokes@ must be ∈ @[1, maxBound]@, and is set to @1024@ if invalid.
+-- * @resolution@ must be ∈ @(0, ∞]@, and is set to @1@ if invalid.
+data Config = Config
+  { -- | Spoke count
+    spokes :: {-# UNPACK #-} !Int,
+    -- | Resolution
+    resolution :: {-# UNPACK #-} !Seconds
+  }
+  deriving stock (Generic, Show)
 
 -- | Create a timer wheel in a scope.
 create :: Ki.Scope -> Config -> IO TimerWheel
-create scope Config {spokes, resolution} = do
+create scope (Config spokes0 resolution0) = do
+  buckets <- Array.newArray spokes Entries.empty
   counter <- newCounter
-  timers <-
-    Timers.create
-      (if spokes <= 0 then 1024 else spokes)
-      (Micros.fromFixed (if resolution <= 0 then 1 else resolution))
-  Ki.fork_ scope (Timers.reap timers)
-  pure TimerWheel {counter, timers}
+  Ki.fork_ scope (runTimerReaperThread buckets resolution)
+  pure TimerWheel {buckets, counter, resolution, totalMicros}
+  where
+    spokes = if spokes0 <= 0 then 1024 else spokes0
+    resolution = Micros.fromNonNegativeSeconds (if resolution0 <= 0 then 1 else resolution0)
+    totalMicros = Micros.scale spokes resolution
 
 -- | Perform an action with a timer wheel.
---
--- /Throws./
---
---   * Throws the exception the given action throws, if any
---   * Throws the exception the timer wheel thread throws, if any
 with :: Config -> (TimerWheel -> IO a) -> IO a
 with config action =
   Ki.scoped \scope -> do
@@ -117,21 +138,24 @@ with config action =
 -- Returns an action that, when called, attempts to cancel the timer, and returns whether or not it was successful
 -- (@False@ means the timer has already fired, or was already cancelled).
 register ::
+  -- | The timer wheel
   TimerWheel ->
-  -- | Delay, in seconds
-  Fixed E6 ->
-  -- | Action
+  -- | The delay before the action is fired
+  Seconds ->
+  -- | The action to fire
   IO () ->
+  -- | An action that attempts to cancel the timer
   IO (IO Bool)
 register wheel delay =
-  registerImpl wheel (Micros.fromSeconds (max 0 delay))
+  registerImpl wheel (Micros.fromSeconds delay)
 
 -- | Like 'register', but for when you don't intend to cancel the timer.
 register_ ::
+  -- | The timer wheel
   TimerWheel ->
-  -- | Delay, in seconds
-  Fixed E6 ->
-  -- | Action
+  -- | The delay before the action is fired
+  Seconds ->
+  -- | The action to fire
   IO () ->
   IO ()
 register_ wheel delay action = do
@@ -139,40 +163,68 @@ register_ wheel delay action = do
   pure ()
 
 registerImpl :: TimerWheel -> Micros -> IO () -> IO (IO Bool)
-registerImpl TimerWheel {counter, timers} delay action = do
+registerImpl TimerWheel {buckets, counter, resolution, totalMicros} delay action = do
+  now <- Timestamp.now
   key <- incrCounter counter
-  Timers.insert timers key delay action
+  let index = timestampToIndex buckets resolution (now `Timestamp.plus` delay)
+  atomicInsertIntoBucket buckets totalMicros index key delay action
+  pure (atomicDeleteFromBucket buckets index key)
 
 -- | @recurring wheel action delay@ registers an action __@action@__ in timer wheel __@wheel@__ to fire every
--- __@delay@__ seconds.
+-- __@delay@__ seconds (but no more often than __@wheel@__'s /resolution/).
 --
 -- Returns an action that, when called, cancels the recurring timer.
+--
+-- Note: it is possible (though very unlikely) for a canceled timer to fire one time after its cancelation.
 recurring ::
+  -- | The timer wheel
   TimerWheel ->
-  -- | Delay, in seconds
-  Fixed E6 ->
-  -- | Action
+  -- | The delay before each action is fired
+  Seconds ->
+  -- | The action to fire repeatedly
   IO () ->
+  -- | An action that cancels the recurring timer
   IO (IO ())
-recurring wheel (Micros.fromSeconds -> delay) action = mdo
+recurring wheel (Micros.fromSeconds -> delay) action = do
+  -- Hold the cancel action for the recurring timer in a mutable cell. Each time the timer is registered, this cancel
+  -- action is updated accordingly to the latest.
+  tryCancelRef <- newIORef undefined
+
+  -- The action for a recurring timer first registers the next firing of the action, then updates the cancel action,
+  -- then performs the action.
   let doAction :: IO ()
       doAction = do
-        cancel <- reregister wheel delay doAction
-        writeIORef cancelRef cancel
+        tryCancel <- reregister wheel delay doAction
+        writeIORef tryCancelRef tryCancel
+        -- At this moment, we've written the cancel action for the *next* recurring timer, but haven't executed *this*
+        -- action. That means it's possible for the user to cancel the recurring timer, *then* observe this one last
+        -- action. That seems fine, though - our semantics of "cancelation" are just "will be canceled eventually" (and,
+        -- more precisely, happen to be "will occur at most one more time, but usually zero").
         action
-  cancel0 <- registerImpl wheel delay doAction
-  cancelRef <- newIORef cancel0
-  pure do
-    untilTrue do
-      cancel <- readIORef cancelRef
-      cancel
+
+  -- Register the first occurrence of the timer (which will re-register itself when it fires, and on and on).
+  tryCancel0 <- registerImpl wheel delay doAction
+  writeIORef tryCancelRef tryCancel0
+
+  -- Return an action that attempt to cancel the timer over and over until success. It's very unlikely that any given
+  -- attempt to cancel doesn't succeed, but it's possible with this thread interleaving:
+  --
+  --   1. User thread reads `tryCancel` from `tryCancelRef`.
+  --   2. Reaper thread performs `doAction` to completion, which registers the next occurrence and performs the action.
+  --   3. User thread calls `tryCancel`, observing that the associated action was already performed.
+  let cancel = do
+        tryCancel <- readIORef tryCancelRef
+        tryCancel >>= \case
+          False -> cancel
+          True -> pure ()
+  pure cancel
 
 -- | Like 'recurring', but for when you don't intend to cancel the timer.
 recurring_ ::
   TimerWheel ->
-  -- | Delay, in seconds
-  Fixed E6 ->
-  -- | Action
+  -- | The delay before each action is fired
+  Seconds ->
+  -- | The action to fire repeatedly
   IO () ->
   IO ()
 recurring_ wheel (Micros.fromSeconds -> delay) action = do
@@ -197,15 +249,92 @@ recurring_ wheel (Micros.fromSeconds -> delay) action = do
 --      act as if it's still "one bucket ago" at the moment we re-register
 --      it.
 reregister :: TimerWheel -> Micros -> IO () -> IO (IO Bool)
-reregister wheel@TimerWheel {timers} delay =
-  registerImpl wheel (if reso > delay then Micros 0 else delay `Micros.minus` reso)
-  where
-    reso :: Micros
-    reso =
-      Timers.resolution timers
+reregister wheel@TimerWheel {resolution} delay =
+  registerImpl
+    wheel
+    if resolution > delay
+      then Micros 0
+      else delay `Micros.minus` resolution
 
--- Repeat an IO action until it returns 'True'.
-untilTrue :: IO Bool -> IO ()
-untilTrue m =
-  fix \again ->
-    m >>= bool again (pure ())
+-- | Get the approximate timer count in a timer wheel.
+--
+-- /O(n)/, where /n/ is the number of timers registered.
+count :: TimerWheel -> IO Int
+count TimerWheel {buckets} =
+  go 0 0
+  where
+    go :: Int -> Int -> IO Int
+    go !acc !i
+      | i == Array.sizeofMutableArray buckets = pure acc
+      | otherwise = do
+          entries <- Array.readArray buckets i
+          go (acc + Entries.size entries) (i + 1)
+
+timestampToIndex :: MutableArray RealWorld Entries -> Micros -> Timestamp -> Int
+timestampToIndex buckets resolution timestamp =
+  -- This downcast is safe because there are at most `maxBound :: Int` buckets (not that anyone would ever have that
+  -- many...)
+  fromIntegral @Word64 @Int
+    (Timestamp.epoch resolution timestamp `rem` fromIntegral @Int @Word64 (Array.sizeofMutableArray buckets))
+
+------------------------------------------------------------------------------------------------------------------------
+-- Atomic operations on buckets
+
+atomicInsertIntoBucket :: MutableArray RealWorld Entries -> Micros -> Int -> Int -> Micros -> IO () -> IO ()
+atomicInsertIntoBucket buckets totalMicros index key delay action = do
+  ticket0 <- Atomics.readArrayElem buckets index
+  loop ticket0
+  where
+    loop ticket = do
+      (success, ticket1) <- Atomics.casArrayElem buckets index ticket (doInsert (Atomics.peekTicket ticket))
+      if success then pure () else loop ticket1
+
+    doInsert :: Entries -> Entries
+    doInsert =
+      Entries.insert key (unMicros (delay `Micros.div` totalMicros)) action
+
+atomicDeleteFromBucket :: MutableArray RealWorld Entries -> Int -> Int -> IO Bool
+atomicDeleteFromBucket buckets index key = do
+  ticket0 <- Atomics.readArrayElem buckets index
+  loop ticket0
+  where
+    loop ticket =
+      case Entries.delete key (Atomics.peekTicket ticket) of
+        Nothing -> pure False
+        Just entries1 -> do
+          (success, ticket1) <- Atomics.casArrayElem buckets index ticket entries1
+          if success then pure True else loop ticket1
+
+atomicExtractExpiredTimersFromBucket :: MutableArray RealWorld Entries -> Int -> IO [IO ()]
+atomicExtractExpiredTimersFromBucket buckets index = do
+  ticket0 <- Atomics.readArrayElem buckets index
+  loop ticket0
+  where
+    loop ticket
+      | Entries.null entries = pure []
+      | otherwise = do
+          let (expired, entries1) = Entries.partition entries
+          (success, ticket1) <- Atomics.casArrayElem buckets index ticket entries1
+          if success then pure expired else loop ticket1
+      where
+        entries = Atomics.peekTicket ticket
+
+------------------------------------------------------------------------------------------------------------------------
+-- Timer reaper thread
+
+runTimerReaperThread :: MutableArray RealWorld Entries -> Micros -> IO void
+runTimerReaperThread buckets resolution = do
+  now <- Timestamp.now
+  let remainingBucketMicros = resolution `Micros.minus` (now `Timestamp.rem` resolution)
+  Micros.sleep remainingBucketMicros
+  loop
+    (now `Timestamp.plus` remainingBucketMicros `Timestamp.plus` resolution)
+    (timestampToIndex buckets resolution now)
+  where
+    loop :: Timestamp -> Int -> IO a
+    loop !nextTime !index = do
+      expired <- atomicExtractExpiredTimersFromBucket buckets index
+      sequence_ expired
+      afterTime <- Timestamp.now
+      when (afterTime < nextTime) (Micros.sleep (nextTime `Timestamp.minus` afterTime))
+      loop (nextTime `Timestamp.plus` resolution) ((index + 1) `rem` Array.sizeofMutableArray buckets)

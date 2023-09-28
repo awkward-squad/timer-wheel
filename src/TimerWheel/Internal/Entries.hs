@@ -9,10 +9,9 @@ module TimerWheel.Internal.Entries
   )
 where
 
-import Data.Coerce
 import Data.IntPSQ (IntPSQ)
 import qualified Data.IntPSQ as IntPSQ
-import Data.Word (Word64)
+import TimerWheel.Internal.Prelude
 
 newtype Entries
   = Entries (IntPSQ Word64 (IO ()))
@@ -29,6 +28,8 @@ null =
 {-# INLINEABLE null #-}
 
 -- | The number of timers in the collection.
+--
+-- /O(n)/.
 size :: Entries -> Int
 size =
   coerce (IntPSQ.size @Word64 @(IO ()))
@@ -63,5 +64,5 @@ partition (Entries entries) =
       m
     g :: Int -> Word64 -> IO () -> (Word64, IO ())
     g _ n m =
-      (n -1, m)
+      (n - 1, m)
 {-# INLINEABLE partition #-}

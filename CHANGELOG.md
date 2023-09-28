@@ -1,7 +1,10 @@
 ## Unreleased
 
-- `create` / `with` will no longer throw an exception if given an invalid config; rather, the config's invalid values
-  will be replaced with sensible defaults
+- Add `count`, which returns the number of timers in a timer wheel
+- Add `Seconds` type alias for readability
+- `create` / `with` no longer throw an exception if given an invalid config; rather, the config's invalid values are
+  replaced with sensible defaults
+- `recurring` / `recurring_` no longer throw an exception if given a negative delay
 - Replace `array` with `primitive`
 - Slightly improve timer insert performance
 

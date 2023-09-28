@@ -42,6 +42,7 @@ common component
     DeriveAnyClass
     DeriveGeneric
     DerivingStrategies
+    DuplicateRecordFields
     GeneralizedNewtypeDeriving
     LambdaCase
     NamedFieldPuns
@@ -76,11 +77,10 @@ library
     TimerWheel
   hs-source-dirs: src
   other-modules:
-    TimerWheel.Internal.Config
     TimerWheel.Internal.Counter
     TimerWheel.Internal.Entries
     TimerWheel.Internal.Micros
-    TimerWheel.Internal.Timers
+    TimerWheel.Internal.Prelude
     TimerWheel.Internal.Timestamp
 
 test-suite tests
@@ -92,24 +92,23 @@ test-suite tests
   main-is: Main.hs
   type: exitcode-stdio-1.0
 
-benchmark bench
-  import: component
-  build-depends:
-    atomic-primops,
-    ki,
-    primitive,
-    psqueues,
-    random ^>= 1.2,
-    tasty-bench,
-  ghc-options: -fproc-alignment=64 -O "-with-rtsopts=-T -A32m"
-  hs-source-dirs: bench, src
-  main-is: Main.hs
-  other-modules:
-    TimerWheel
-    TimerWheel.Internal.Config
-    TimerWheel.Internal.Counter
-    TimerWheel.Internal.Entries
-    TimerWheel.Internal.Micros
-    TimerWheel.Internal.Timers
-    TimerWheel.Internal.Timestamp
-  type: exitcode-stdio-1.0
+-- benchmark bench
+--   import: component
+--   build-depends:
+--     atomic-primops,
+--     ki,
+--     primitive,
+--     psqueues,
+--     random ^>= 1.2,
+--     tasty-bench,
+--   ghc-options: -fproc-alignment=64 -O "-with-rtsopts=-T -A32m"
+--   hs-source-dirs: bench, src
+--   main-is: Main.hs
+--   other-modules:
+--     TimerWheel
+--     TimerWheel.Internal.Counter
+--     TimerWheel.Internal.Entries
+--     TimerWheel.Internal.Micros
+--     TimerWheel.Internal.Prelude
+--     TimerWheel.Internal.Timestamp
+--   type: exitcode-stdio-1.0

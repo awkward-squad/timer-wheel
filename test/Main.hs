@@ -19,7 +19,7 @@ main = do
     putStrLn "Timer wheel runs scheduled actions"
     with Config {spokes = 4, resolution = 0.05} \wheel -> do
       var <- newEmptyMVar
-      let n = 1000
+      let n = 1000 :: Int
       replicateM_ n (register_ wheel 0 (putMVar var ()))
       replicateM_ n (takeMVar var)
 
@@ -27,7 +27,7 @@ main = do
     putStrLn "Timers can be canceled"
     var <- newEmptyMVar
     with Config {spokes = 4, resolution = 0.05} \wheel -> do
-      let n = 1000
+      let n = 1000 :: Int
       cancels <- replicateM n (register wheel 0 (putMVar var ()))
       successes <- sequence (take (n `div` 2) cancels)
       replicateM_ (n - length (filter id successes)) (takeMVar var)

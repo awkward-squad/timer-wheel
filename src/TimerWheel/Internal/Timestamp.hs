@@ -8,10 +8,9 @@ module TimerWheel.Internal.Timestamp
   )
 where
 
-import Data.Coerce (coerce)
-import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
 import TimerWheel.Internal.Micros (Micros (..))
+import TimerWheel.Internal.Prelude
 
 newtype Timestamp
   = Timestamp Word64

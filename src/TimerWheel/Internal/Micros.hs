@@ -1,7 +1,7 @@
 module TimerWheel.Internal.Micros
   ( Micros (..),
-    fromFixed,
     fromSeconds,
+    fromNonNegativeSeconds,
     TimerWheel.Internal.Micros.div,
     minus,
     scale,
@@ -10,22 +10,25 @@ module TimerWheel.Internal.Micros
 where
 
 import Control.Concurrent (threadDelay)
-import Data.Coerce
-import Data.Fixed
-import Data.Word
+import Data.Fixed (Fixed (..))
+import TimerWheel.Internal.Prelude
 
 newtype Micros = Micros {unMicros :: Word64}
   deriving stock (Eq, Ord)
 
--- | Precondition: input is >= 0
-fromFixed :: Fixed E6 -> Micros
-fromFixed =
-  coerce @(Integer -> Word64) fromIntegral
+-- | Convert a number of seconds into a number of microseconds.
+--
+-- Negative values are converted to 0.
+fromSeconds :: Seconds -> Micros
+fromSeconds =
+  fromNonNegativeSeconds . max 0
 
-fromSeconds :: Fixed E6 -> Micros
-fromSeconds seconds@(MkFixed micros)
-  | micros < 0 = error ("timer-wheel: invalid seconds: " ++ show seconds)
-  | otherwise = Micros (fromIntegral micros)
+-- | Like 'fromNonNegativeSeconds', but with an unchecked precondition: the given seconds is non-negative.
+--
+-- What you get for your troubles: one puny fewer int comparisons.
+fromNonNegativeSeconds :: Seconds -> Micros
+fromNonNegativeSeconds =
+  coerce @(Integer -> Word64) fromIntegral
 
 div :: Micros -> Micros -> Micros
 div =
