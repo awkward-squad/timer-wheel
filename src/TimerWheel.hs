@@ -1,6 +1,3 @@
-{-# LANGUAGE RecursiveDo #-}
-
--- | A simple, hashed timer wheel.
 module TimerWheel
   ( -- * Timer wheel
     TimerWheel,
@@ -11,14 +8,14 @@ module TimerWheel
     create,
     with,
 
-    -- ** Registering timers
+    -- ** Querying a timer wheel
+    count,
+
+    -- ** Registering timers in a timer wheel
     register,
     register_,
     recurring,
     recurring_,
-
-    -- ** Querying a timer wheel
-    count,
   )
 where
 
@@ -119,7 +116,13 @@ data Config = Config
   deriving stock (Generic, Show)
 
 -- | Create a timer wheel in a scope.
-create :: Ki.Scope -> Config -> IO TimerWheel
+create ::
+  -- | ​
+  Ki.Scope ->
+  -- | ​
+  Config ->
+  -- | ​
+  IO TimerWheel
 create scope (Config spokes0 resolution0) = do
   buckets <- Array.newArray spokes Entries.empty
   numTimers <- newCounter
@@ -132,7 +135,13 @@ create scope (Config spokes0 resolution0) = do
     totalMicros = Micros.scale spokes resolution
 
 -- | Perform an action with a timer wheel.
-with :: Config -> (TimerWheel -> IO a) -> IO a
+with ::
+  -- | ​
+  Config ->
+  -- | ​
+  (TimerWheel -> IO a) ->
+  -- | ​
+  IO a
 with config action =
   Ki.scoped \scope -> do
     wheel <- create scope config
