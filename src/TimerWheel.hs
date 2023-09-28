@@ -263,7 +263,7 @@ reregister wheel@TimerWheel {resolution} delay =
       then Micros 0
       else delay `Micros.minus` resolution
 
--- | Get the approximate timer count in a timer wheel.
+-- | Get the number of timers in a timer wheel.
 --
 -- /O(1)/.
 count :: TimerWheel -> IO Int
