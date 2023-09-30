@@ -92,14 +92,14 @@ test-suite tests
   main-is: Main.hs
   type: exitcode-stdio-1.0
 
--- benchmark bench
---   import: component
---   build-depends:
---     ki,
---     random ^>= 1.2,
---     tasty-bench,
---     timer-wheel,
---   ghc-options: -fproc-alignment=64 -O -threaded "-with-rtsopts=-N2 -T -A32m"
---   hs-source-dirs: bench
---   main-is: Main.hs
---   type: exitcode-stdio-1.0
+benchmark bench
+  import: component
+  build-depends:
+    ki,
+    random ^>= 1.2,
+    tasty-bench,
+    timer-wheel,
+  ghc-options: -fproc-alignment=64 -O -threaded "-with-rtsopts=-N2 -T -A32m"
+  hs-source-dirs: bench
+  main-is: Main.hs
+  type: exitcode-stdio-1.0
