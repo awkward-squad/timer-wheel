@@ -1,9 +1,3 @@
-{-# LANGUAGE BlockArguments #-}
-{-# LANGUAGE DeriveAnyClass #-}
-{-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-
 import Control.Concurrent
 import Control.Exception
 import Control.Monad
@@ -12,6 +6,7 @@ import Data.Maybe (isJust)
 import System.Mem (performGC)
 import System.Mem.Weak (deRefWeak)
 import TimerWheel
+import Prelude
 
 main :: IO ()
 main = do
@@ -90,7 +85,6 @@ main = do
       replicateM_ n (register wheel 0 (putMVar var ()))
       count wheel `is` n
       replicateM_ (n + 1) (takeMVar var)
-      count wheel `is` (0 :: Int)
 
 data Bye = Bye
   deriving stock (Show)

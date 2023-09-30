@@ -5,6 +5,7 @@ import Control.Monad (replicateM)
 import Data.Foldable (for_)
 import GHC.Conc (atomically)
 import qualified Ki
+import Prelude
 import qualified System.Random as Random
 import qualified System.Random.Stateful as Random
 import Test.Tasty.Bench

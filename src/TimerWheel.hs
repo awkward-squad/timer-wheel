@@ -20,19 +20,18 @@ module TimerWheel
 where
 
 import qualified Data.Atomics as Atomics
-import Data.Foldable (for_)
 import Data.Primitive.Array (MutableArray)
 import qualified Data.Primitive.Array as Array
 import GHC.Base (RealWorld)
 import qualified Ki
 import TimerWheel.Internal.Counter (Counter, decrCounter_, incrCounter, incrCounter_, newCounter, readCounter)
-import TimerWheel.Internal.Entries (Entries)
-import qualified TimerWheel.Internal.Entries as Entries
-import TimerWheel.Internal.Micros (Micros (..))
-import qualified TimerWheel.Internal.Micros as Micros
+import TimerWheel.Internal.Nanoseconds (Nanoseconds (..))
+import qualified TimerWheel.Internal.Nanoseconds as Nanoseconds
 import TimerWheel.Internal.Prelude
 import TimerWheel.Internal.Timestamp (Timestamp)
 import qualified TimerWheel.Internal.Timestamp as Timestamp
+import TimerWheel.Internal.TimestampMap (TimestampMap)
+import qualified TimerWheel.Internal.TimestampMap as TimestampMap
 
 -- | A timer wheel is a vector-of-collections-of timers to fire. It is configured with a /spoke count/ and /resolution/.
 -- Timers may be scheduled arbitrarily far in the future. A timeout thread is spawned to step through the timer wheel
@@ -90,18 +89,12 @@ import qualified TimerWheel.Internal.Timestamp as Timestamp
 --                                   ↑
 -- @
 data TimerWheel = TimerWheel
-  { buckets :: {-# UNPACK #-} !(MutableArray RealWorld Entries),
-    resolution :: {-# UNPACK #-} !Micros,
+  { buckets :: {-# UNPACK #-} !(MutableArray RealWorld TimerBucket),
+    resolution :: {-# UNPACK #-} !Nanoseconds,
     numTimers :: {-# UNPACK #-} !Counter,
     -- A counter to generate unique ints that identify registered actions, so they can be canceled.
-    timerIdSupply :: {-# UNPACK #-} !Counter,
-    -- The total number of microseconds that one trip 'round the wheel represents. This value is needed whenever a new
-    -- timer is inserted, so we cache it, though this doesn't really show up on any benchmark we've put together heh
-    totalMicros :: {-# UNPACK #-} !Micros
+    timerIdSupply :: {-# UNPACK #-} !Counter
   }
-
--- Internal type alias for readability
-type TimerId = Int
 
 -- | Timer wheel config.
 --
@@ -124,15 +117,14 @@ create ::
   -- | ​
   IO TimerWheel
 create scope (Config spokes0 resolution0) = do
-  buckets <- Array.newArray spokes Entries.empty
+  buckets <- Array.newArray spokes TimestampMap.empty
   numTimers <- newCounter
   timerIdSupply <- newCounter
   Ki.fork_ scope (runTimerReaperThread buckets numTimers resolution)
-  pure TimerWheel {buckets, numTimers, resolution, timerIdSupply, totalMicros}
+  pure TimerWheel {buckets, numTimers, resolution, timerIdSupply}
   where
     spokes = if spokes0 <= 0 then 1024 else spokes0
-    resolution = Micros.fromNonNegativeSeconds (if resolution0 <= 0 then 1 else resolution0)
-    totalMicros = Micros.scale spokes resolution
+    resolution = Nanoseconds.fromNonNegativeSeconds (if resolution0 <= 0 then 1 else resolution0)
 
 -- | Perform an action with a timer wheel.
 with ::
@@ -162,7 +154,7 @@ register ::
   -- | An action that attempts to cancel the timer
   IO (IO Bool)
 register wheel delay =
-  registerImpl wheel (Micros.fromSeconds delay)
+  registerImpl wheel (Nanoseconds.fromSeconds delay)
 
 -- | Like 'register', but for when you don't intend to cancel the timer.
 register_ ::
@@ -177,15 +169,15 @@ register_ wheel delay action = do
   _ <- register wheel delay action
   pure ()
 
-registerImpl :: TimerWheel -> Micros -> IO () -> IO (IO Bool)
-registerImpl TimerWheel {buckets, numTimers, resolution, timerIdSupply, totalMicros} delay action = do
+registerImpl :: TimerWheel -> Nanoseconds -> IO () -> IO (IO Bool)
+registerImpl TimerWheel {buckets, numTimers, resolution, timerIdSupply} delay action = do
   now <- Timestamp.now
   incrCounter_ numTimers
   timerId <- incrCounter timerIdSupply
-  let index = timestampToIndex buckets resolution (now `Timestamp.plus` delay)
-  let c = unMicros (delay `Micros.div` totalMicros)
-  atomicInsertIntoBucket buckets index (Entries.insert timerId c action)
-  pure (atomicDeleteFromBucket buckets index timerId)
+  let timestamp = now `Timestamp.plus` delay
+  let index = timestampToIndex buckets resolution timestamp
+  atomicModifyArray buckets index (timerBucketInsert timestamp (Timer timerId action))
+  pure (atomicMaybeModifyArray buckets index (timerBucketDelete timestamp timerId))
 
 -- | @recurring wheel action delay@ registers an action __@action@__ in timer wheel __@wheel@__ to fire every
 -- __@delay@__ seconds (but no more often than __@wheel@__'s /resolution/).
@@ -202,7 +194,7 @@ recurring ::
   IO () ->
   -- | An action that cancels the recurring timer
   IO (IO ())
-recurring wheel (Micros.fromSeconds -> delay) action = do
+recurring wheel (Nanoseconds.fromSeconds -> delay) action = do
   -- Hold the cancel action for the recurring timer in a mutable cell. Each time the timer is registered, this cancel
   -- action is updated accordingly to the latest.
   tryCancelRef <- newIORef undefined
@@ -251,7 +243,7 @@ recurring_ ::
   -- | The action to fire repeatedly
   IO () ->
   IO ()
-recurring_ wheel (Micros.fromSeconds -> delay) action = do
+recurring_ wheel (Nanoseconds.fromSeconds -> delay) action = do
   _ <- registerImpl wheel delay doAction
   pure ()
   where
@@ -272,13 +264,13 @@ recurring_ wheel (Micros.fromSeconds -> delay) action = do
 --      this time, three buckets will pass before it's run again. So, we
 --      act as if it's still "one bucket ago" at the moment we re-register
 --      it.
-reregister :: TimerWheel -> Micros -> IO () -> IO (IO Bool)
+reregister :: TimerWheel -> Nanoseconds -> IO () -> IO (IO Bool)
 reregister wheel@TimerWheel {resolution} delay =
   registerImpl
     wheel
     if resolution > delay
-      then Micros 0
-      else delay `Micros.minus` resolution
+      then Nanoseconds 0
+      else delay `Nanoseconds.unsafeMinus` resolution
 
 -- | Get the number of timers in a timer wheel.
 --
@@ -288,24 +280,24 @@ count TimerWheel {numTimers} =
   readCounter numTimers
 
 -- `timestampToIndex buckets resolution timestamp` figures out which index `timestamp` corresponds to in `buckets`,
--- where each bucket corresponds to `resolution` microseconds.
+-- where each bucket corresponds to `resolution` nanoseconds.
 --
--- For example, consider a three-element `buckets` with resolution `10000us`.
+-- For example, consider a three-element `buckets` with resolution `1000000000`.
 --
---   +-----------------------------+
---   | 10000us | 10000us | 10000us |
---   +-----------------------------+
+--   +--------------------------------------+
+--   | 1000000000 | 1000000000 | 1000000000 |
+--   +--------------------------------------+
 --
 -- Some timestamp like `1053298012387` gets binned to one of the three indices 0, 1, or 2, with quick and easy maffs:
 --
 --   1. Figure out which index the timestamp corresponds to, if there were infinitely many:
 --
---        1053298012387 `div` 10000 = 105329801
+--        1053298012387 `div` 1000000000 = 1053
 --
 --   2. Wrap around per the actual length of the array:
 --
---        105329801 `rem` 3 = 2
-timestampToIndex :: MutableArray RealWorld Entries -> Micros -> Timestamp -> Int
+--        1053 `rem` 3 = 0
+timestampToIndex :: MutableArray RealWorld bucket -> Nanoseconds -> Timestamp -> Int
 timestampToIndex buckets resolution timestamp =
   -- This downcast is safe because there are at most `maxBound :: Int` buckets (not that anyone would ever have that
   -- many...)
@@ -313,63 +305,169 @@ timestampToIndex buckets resolution timestamp =
     (Timestamp.epoch resolution timestamp `rem` fromIntegral @Int @Word64 (Array.sizeofMutableArray buckets))
 
 ------------------------------------------------------------------------------------------------------------------------
--- Atomic operations on buckets
+-- Timer bucket operations
 
-atomicInsertIntoBucket :: MutableArray RealWorld Entries -> Int -> (Entries -> Entries) -> IO ()
-atomicInsertIntoBucket buckets index doInsert = do
-  ticket0 <- Atomics.readArrayElem buckets index
+type TimerBucket =
+  TimestampMap Timers
+
+timerBucketDelete :: Timestamp -> TimerId -> TimerBucket -> Maybe TimerBucket
+timerBucketDelete timestamp timerId bucket =
+  case TimestampMap.lookup timestamp bucket of
+    Nothing -> Nothing
+    Just (Timers1 (Timer timerId1 _))
+      | timerId == timerId1 -> Just $! TimestampMap.delete timestamp bucket
+      | otherwise -> Nothing
+    Just (TimersN timers0) ->
+      case timersDelete timerId timers0 of
+        Nothing -> Nothing
+        Just timers1 ->
+          let timers2 =
+                case timers1 of
+                  [timer] -> Timers1 timer
+                  _ -> TimersN timers1
+           in Just $! TimestampMap.insert timestamp timers2 bucket
+
+timerBucketInsert :: Timestamp -> Timer -> TimerBucket -> TimerBucket
+timerBucketInsert timestamp timer =
+  TimestampMap.upsert timestamp (Timers1 timer) \case
+    Timers1 old -> TimersN [timer, old]
+    TimersN old -> TimersN (timer : old)
+
+-- Fire every timer in a bucket, in order
+timerBucketFire :: Counter -> TimerBucket -> IO ()
+timerBucketFire numTimers =
+  TimestampMap.foreach \_ -> \case
+    Timers1 timer -> timerActionThenDecr timer
+    TimersN timers -> foldr f (pure ()) timers
+  where
+    f :: Timer -> IO () -> IO ()
+    f timer acc = do
+      acc
+      timerActionThenDecr timer
+
+    timerActionThenDecr :: Timer -> IO ()
+    timerActionThenDecr timer = do
+      timerAction timer
+      decrCounter_ numTimers
+
+data Timers
+  = Timers1 {-# UNPACK #-} !Timer
+  | -- 2+ timers, stored in the reverse order that they were enqueued (so the last should fire first)
+    TimersN ![Timer]
+
+timersDelete :: TimerId -> [Timer] -> Maybe [Timer]
+timersDelete timerId =
+  go
+  where
+    go :: [Timer] -> Maybe [Timer]
+    go = \case
+      [] -> Nothing
+      Timer timerId1 _ : timers | timerId == timerId1 -> Just timers
+      timer : timers -> (timer :) <$> go timers
+
+data Timer
+  = Timer
+      !TimerId
+      !(IO ())
+
+timerAction :: Timer -> IO ()
+timerAction = \case
+  Timer _ action -> action
+
+type TimerId =
+  Int
+
+------------------------------------------------------------------------------------------------------------------------
+-- Atomic operations on arrays
+
+atomicModifyArray :: forall a. MutableArray RealWorld a -> Int -> (a -> a) -> IO ()
+atomicModifyArray array index f = do
+  ticket0 <- Atomics.readArrayElem array index
   loop ticket0
   where
+    loop :: Atomics.Ticket a -> IO ()
     loop ticket = do
-      (success, ticket1) <- Atomics.casArrayElem buckets index ticket (doInsert (Atomics.peekTicket ticket))
+      (success, ticket1) <- Atomics.casArrayElem array index ticket (f (Atomics.peekTicket ticket))
       if success then pure () else loop ticket1
 
-atomicDeleteFromBucket :: MutableArray RealWorld Entries -> Int -> TimerId -> IO Bool
-atomicDeleteFromBucket buckets index timerId = do
+atomicMaybeModifyArray :: forall a. MutableArray RealWorld a -> Int -> (a -> Maybe a) -> IO Bool
+atomicMaybeModifyArray buckets index doDelete = do
   ticket0 <- Atomics.readArrayElem buckets index
   loop ticket0
   where
+    loop :: Atomics.Ticket a -> IO Bool
     loop ticket =
-      case Entries.delete timerId (Atomics.peekTicket ticket) of
+      case doDelete (Atomics.peekTicket ticket) of
         Nothing -> pure False
-        Just entries1 -> do
-          (success, ticket1) <- Atomics.casArrayElem buckets index ticket entries1
+        Just bucket -> do
+          (success, ticket1) <- Atomics.casArrayElem buckets index ticket bucket
           if success then pure True else loop ticket1
 
-atomicExtractExpiredTimersFromBucket :: MutableArray RealWorld Entries -> Int -> IO [IO ()]
-atomicExtractExpiredTimersFromBucket buckets index = do
+atomicExtractExpiredTimersFromBucket :: MutableArray RealWorld TimerBucket -> Int -> Timestamp -> IO TimerBucket
+atomicExtractExpiredTimersFromBucket buckets index now = do
   ticket0 <- Atomics.readArrayElem buckets index
   loop ticket0
   where
-    loop ticket
-      | Entries.null entries = pure []
-      | otherwise = do
-          let (expired, entries1) = Entries.partition entries
-          (success, ticket1) <- Atomics.casArrayElem buckets index ticket entries1
+    loop :: Atomics.Ticket TimerBucket -> IO TimerBucket
+    loop ticket = do
+      let Pair expired bucket1 = TimestampMap.splitL now (Atomics.peekTicket ticket)
+      if TimestampMap.null expired
+        then pure TimestampMap.empty
+        else do
+          (success, ticket1) <- Atomics.casArrayElem buckets index ticket bucket1
           if success then pure expired else loop ticket1
-      where
-        entries = Atomics.peekTicket ticket
 
 ------------------------------------------------------------------------------------------------------------------------
 -- Timer reaper thread
 
-runTimerReaperThread :: MutableArray RealWorld Entries -> Counter -> Micros -> IO void
+runTimerReaperThread :: MutableArray RealWorld TimerBucket -> Counter -> Nanoseconds -> IO void
 runTimerReaperThread buckets numTimers resolution = do
   -- Sleep until the very first bucket of timers expires
   now <- Timestamp.now
-  let remainingBucketMicros = resolution `Micros.minus` (now `Timestamp.rem` resolution)
-  Micros.sleep remainingBucketMicros
+  let remainingBucketNanos = resolution `Nanoseconds.unsafeMinus` (now `Timestamp.intoEpoch` resolution)
+  Nanoseconds.sleep remainingBucketNanos
 
-  loop
-    (now `Timestamp.plus` remainingBucketMicros `Timestamp.plus` resolution)
-    (timestampToIndex buckets resolution now)
+  loop (now `Timestamp.plus` remainingBucketNanos) (timestampToIndex buckets resolution now)
   where
+    --   +----+----+----+----+----+----+
+    --   |    |    |    |    |    |    |
+    --   +----+----+----+----+----+----+
+    --     ^  ^    ^
+    --     |  |    nextTime = 7418238000
+    --     |  |
+    --     |  thisTime = 7418237000
+    --     |
+    --     index = 0
+    --
+    -- `loop thisTime index` does this in a loop:
+    --
+    --   1. Expires all timers at `index`, per `thisTime` (which may be arbitrarily behind reality)
+    --   2. Sleeps until `nextTime`
+    --   3. Loops with `thisTime = nextTime`, `index = index + 1`
+    --
+    -- Under "normal" conditions, wherein the timer thread can keep up with the timer actions, we'll be in a loop like
+    -- this (using small numbers for monotonic timestamps, for readability)
+    --
+    --   1. Enter loop with `thisTime = 1000`, `index = 4`, and the actual timestamp is something like `now = 1004`,
+    --      later than `thisTime` due to thread scheduling and such, but not by much.
+    --   2. Expire all timers at `index = 4` whose expiry is <= 1000 (`thisTime`)
+    --   3. Get the current time `now = 1150`
+    --   4. Sleep for `2000 - 1150 = 850`
+    --   5. Re-enter the loop with `thisTime = 2000`, `index = 5`
+    --
+    -- But things still work even if the reaper thread gets hopelessly behind schedule:
+    --
+    --   1. Enter loop with `thisTime = 1000`, `index = 4`, and the actual timestamp is something like `now = 3050`.
+    --   2. Expire all timers at `index = 4` whose expiry is <= 1000 (`thisTime`)
+    --   3. Re-enter the loop with `thisTime = 2000`, `index = 5`
+    --
+    -- Critically, we have not accidentally skipped ahead to the actual index that corresponds to `now`; rather, we
+    -- always advance bucket-by-bucket no matter what the actual current timestamp is.
     loop :: Timestamp -> Int -> IO void
-    loop !nextTime !index = do
-      expired <- atomicExtractExpiredTimersFromBucket buckets index
-      for_ expired \action -> do
-        action
-        decrCounter_ numTimers
+    loop !thisTime !index = do
+      let !nextTime = thisTime `Timestamp.plus` resolution
+      expired <- atomicExtractExpiredTimersFromBucket buckets index thisTime
+      timerBucketFire numTimers expired
       now <- Timestamp.now
-      when (now < nextTime) (Micros.sleep (nextTime `Timestamp.minus` now))
-      loop (nextTime `Timestamp.plus` resolution) ((index + 1) `rem` Array.sizeofMutableArray buckets)
+      when (nextTime > now) (Nanoseconds.sleep (nextTime `Timestamp.unsafeMinus` now))
+      loop nextTime ((index + 1) `rem` Array.sizeofMutableArray buckets)

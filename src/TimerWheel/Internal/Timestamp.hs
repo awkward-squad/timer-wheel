@@ -1,40 +1,40 @@
 module TimerWheel.Internal.Timestamp
   ( Timestamp (..),
     epoch,
-    minus,
-    now,
+    intoEpoch,
+    unsafeMinus,
     plus,
-    TimerWheel.Internal.Timestamp.rem,
+    now,
   )
 where
 
 import GHC.Clock (getMonotonicTimeNSec)
-import TimerWheel.Internal.Micros (Micros (..))
+import TimerWheel.Internal.Nanoseconds (Nanoseconds (..))
 import TimerWheel.Internal.Prelude
+import qualified Prelude
 
--- Monotonic time, in microseconds
+-- Monotonic time, in nanoseconds
 newtype Timestamp
-  = Timestamp Word64
+  = Timestamp Nanoseconds
   deriving stock (Eq, Ord)
 
--- Which epoch does this correspond to, if they are measured in chunks of the given number of milliseconds?
-epoch :: Micros -> Timestamp -> Word64
-epoch (Micros chunk) (Timestamp timestamp) =
-  timestamp `div` chunk
+-- Which epoch does this correspond to, if they are measured in chunks of the given number of nanoseconds?
+epoch :: Nanoseconds -> Timestamp -> Word64
+epoch x y =
+  coerce @_ @Word64 y `div` coerce x
 
-minus :: Timestamp -> Timestamp -> Micros
-minus =
+intoEpoch :: Timestamp -> Nanoseconds -> Nanoseconds
+intoEpoch =
+  coerce (Prelude.rem @Word64)
+
+unsafeMinus :: Timestamp -> Timestamp -> Nanoseconds
+unsafeMinus =
   coerce ((-) @Word64)
 
-now :: IO Timestamp
-now = do
-  nanos <- getMonotonicTimeNSec
-  pure (Timestamp (nanos `div` 1000))
-
-plus :: Timestamp -> Micros -> Timestamp
+plus :: Timestamp -> Nanoseconds -> Timestamp
 plus =
   coerce ((+) @Word64)
 
-rem :: Timestamp -> Micros -> Micros
-rem =
-  coerce (Prelude.rem @Word64)
+now :: IO Timestamp
+now =
+  coerce getMonotonicTimeNSec

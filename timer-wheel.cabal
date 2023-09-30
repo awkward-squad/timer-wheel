@@ -43,9 +43,12 @@ common component
     DeriveGeneric
     DerivingStrategies
     DuplicateRecordFields
+    FlexibleInstances
     GeneralizedNewtypeDeriving
     LambdaCase
+    MultiParamTypeClasses
     NamedFieldPuns
+    NoImplicitPrelude
     RecursiveDo
     ScopedTypeVariables
     TupleSections
@@ -70,18 +73,18 @@ library
   import: component
   build-depends:
     atomic-primops ^>= 0.8,
+    containers ^>= 0.6 || ^>= 0.7,
     ki ^>= 1.0.0,
     primitive ^>= 0.7 || ^>= 0.8,
-    psqueues ^>= 0.2.7,
   exposed-modules:
     TimerWheel
   hs-source-dirs: src
   other-modules:
     TimerWheel.Internal.Counter
-    TimerWheel.Internal.Entries
-    TimerWheel.Internal.Micros
+    TimerWheel.Internal.Nanoseconds
     TimerWheel.Internal.Prelude
     TimerWheel.Internal.Timestamp
+    TimerWheel.Internal.TimestampMap
 
 test-suite tests
   import: component
