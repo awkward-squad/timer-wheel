@@ -20,7 +20,7 @@ where
 
 import Data.Bits
 import Data.Word
-import TimerWheel.Internal.Prelude
+import Prelude hiding (lookup, null)
 
 data WordMap a
   = Bin {-# UNPACK #-} !Prefix {-# UNPACK #-} !Mask !(WordMap1 a) !(WordMap1 a)
