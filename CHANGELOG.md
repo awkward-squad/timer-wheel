@@ -1,4 +1,4 @@
-## Unreleased
+## [1.0.0] - Unreleased
 
 - Add `count`, which returns the number of timers in a timer wheel
 - Add `Seconds` type alias for readability
