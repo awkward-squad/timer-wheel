@@ -7,6 +7,7 @@ import qualified Ki
 import qualified System.Random as Random
 import TimerWheel
 import Prelude
+import Data.Foldable (traverse_)
 
 main :: IO ()
 main = do
@@ -27,22 +28,22 @@ main1 = do
   with Config {spokes = 16, resolution = 0.05} \wheel -> do
     var <- newEmptyMVar
     let n = 1000 :: Int
-    cancels <- replicateM n (register wheel 0 (putMVar var ()))
-    successes <- sequence (take (n `div` 2) cancels)
+    timers <- replicateM n (register wheel 0 (putMVar var ()))
+    successes <- traverse cancel (take (n `div` 2) timers)
     replicateM_ (n - length (filter id successes)) (takeMVar var)
 
   putStrLn "successful `cancel` returns true, then false"
   with Config {spokes = 16, resolution = 0.05} \wheel -> do
-    cancel <- register wheel 1 (pure ())
-    cancel `is` True
-    cancel `is` False
+    timer <- register wheel 1 (pure ())
+    cancel timer `is` True
+    cancel timer `is` False
 
   putStrLn "unsuccessful `cancel` returns false"
   with Config {spokes = 16, resolution = 0.05} \wheel -> do
     var <- newEmptyMVar
-    cancel <- register wheel 0 (putMVar var ())
+    timer <- register wheel 0 (putMVar var ())
     takeMVar var
-    cancel `is` False
+    cancel timer `is` False
 
   putStrLn "recurring timers work with delay > resolution work"
   with Config {spokes = 16, resolution = 0.05} \wheel -> do
@@ -53,10 +54,10 @@ main1 = do
 
   putStrLn "calling `cancel` more than once on a recurring timer is ok"
   with Config {spokes = 4, resolution = 0.05} \wheel -> do
-    cancel <- recurring wheel 1 (pure ())
-    cancel
+    timer <- recurring wheel 1 (pure ())
+    cancel timer
     -- At one time, this one would loop indefinitely :grimace:
-    cancel
+    cancel timer
 
   putStrLn "`with` re-throws exception from background thread"
   ( with Config {spokes = 16, resolution = 0.05} \wheel -> do
@@ -81,35 +82,35 @@ main1 = do
   putStrLn "`count` decrements on `cancel` (registered)"
   with Config {spokes = 16, resolution = 0.05} \wheel -> do
     let n = 10 :: Int
-    cancels <- replicateM n (register wheel 1 (pure ()))
-    sequence cancels `is` replicate n True
+    timers <- replicateM n (register wheel 1 (pure ()))
+    traverse cancel timers `is` replicate n True
     count wheel `is` (0 :: Int)
 
   putStrLn "`count` decrements on `cancel` (recurring)"
   with Config {spokes = 16, resolution = 0.05} \wheel -> do
     let n = 10 :: Int
-    cancels <- replicateM n (recurring wheel 1 (pure ()))
-    sequence_ cancels
+    timers <- replicateM n (recurring wheel 1 (pure ()))
+    traverse_ cancel timers
     count wheel `is` (0 :: Int)
 
   putStrLn "stress test: register 1m timers into 1k spokes, then cancel them all"
   with Config {spokes = 1000, resolution = 1} \wheel -> do
     firedRef <- newIORef (0 :: Int)
-    let registerLoop :: [IO Bool] -> Random.StdGen -> Int -> IO [IO Bool]
-        registerLoop cancels gen0 !i
-          | i >= 1_000_000 = pure cancels
+    let registerLoop :: [Timer Bool] -> Random.StdGen -> Int -> IO [Timer Bool]
+        registerLoop timers gen0 !i
+          | i >= 1_000_000 = pure timers
           | otherwise = do
               let (delay, gen1) = Random.uniformR (0 :: Double, 10_000) gen0
-              cancel <- register wheel (realToFrac @Double @Seconds delay) (modifyIORef' firedRef (+ 1))
-              registerLoop (cancel : cancels) gen1 (i + 1)
-    let cancelLoop :: Int -> [IO Bool] -> IO Int
+              timer <- register wheel (realToFrac @Double @Seconds delay) (modifyIORef' firedRef (+ 1))
+              registerLoop (timer : timers) gen1 (i + 1)
+    let cancelLoop :: Int -> [Timer Bool] -> IO Int
         cancelLoop !n = \case
           [] -> pure n
-          cancel : cancels -> do
-            success <- cancel
-            cancelLoop (if success then n + 1 else n) cancels
-    cancels <- registerLoop [] (Random.mkStdGen 0) 0
-    canceled <- cancelLoop 0 cancels
+          timer : timers -> do
+            success <- cancel timer
+            cancelLoop (if success then n + 1 else n) timers
+    timers <- registerLoop [] (Random.mkStdGen 0) 0
+    canceled <- cancelLoop 0 timers
     fired <- readIORef firedRef
     (fired + canceled) `is` (1_000_000 :: Int)
 
