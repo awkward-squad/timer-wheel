@@ -44,8 +44,8 @@ import qualified TimerWheel.Internal.Nanoseconds as Nanoseconds
 import TimerWheel.Internal.Prelude
 import TimerWheel.Internal.Timestamp (Timestamp)
 import qualified TimerWheel.Internal.Timestamp as Timestamp
-import TimerWheel.Internal.TimestampMap (TimestampMap)
-import qualified TimerWheel.Internal.TimestampMap as TimestampMap
+import TimerWheel.Internal.WordMap (WordMap)
+import qualified TimerWheel.Internal.WordMap as WordMap
 
 -- | A timer wheel is a vector-of-collections-of timers to fire. Timers may be one-shot or recurring, and may be
 -- scheduled arbitrarily far in the future.
@@ -126,7 +126,7 @@ create ::
   -- | ​
   IO TimerWheel
 create scope (Config spokes0 resolution0) = do
-  buckets <- Array.newArray spokes TimestampMap.empty
+  buckets <- Array.newArray spokes WordMap.empty
   numTimers <- newCounter
   timerIdSupply <- newCounter
   Ki.fork_ scope (runTimerReaperThread buckets numTimers resolution)
@@ -290,14 +290,14 @@ timestampToIndex buckets resolution timestamp =
 -- Timer bucket operations
 
 type TimerBucket =
-  TimestampMap Timers
+  WordMap Timers
 
 timerBucketDelete :: Timestamp -> TimerId -> TimerBucket -> Maybe TimerBucket
-timerBucketDelete timestamp timerId bucket =
-  case TimestampMap.lookup timestamp bucket of
+timerBucketDelete (coerce @Timestamp @Word64 -> timestamp) timerId bucket =
+  case WordMap.lookup timestamp bucket of
     Nothing -> Nothing
     Just (Timers1 timer)
-      | timerId == getTimerId timer -> Just $! TimestampMap.delete timestamp bucket
+      | timerId == getTimerId timer -> Just $! WordMap.delete timestamp bucket
       | otherwise -> Nothing
     Just (TimersN timers0) ->
       case timersDelete timerId timers0 of
@@ -307,11 +307,11 @@ timerBucketDelete timestamp timerId bucket =
                 case timers1 of
                   [timer] -> Timers1 timer
                   _ -> TimersN timers1
-           in Just $! TimestampMap.insert timestamp timers2 bucket
+           in Just $! WordMap.insert timestamp timers2 bucket
 
 timerBucketInsert :: Timestamp -> Timer0 -> TimerBucket -> TimerBucket
 timerBucketInsert timestamp timer =
-  TimestampMap.upsert timestamp (Timers1 timer) \case
+  WordMap.upsert (coerce @Timestamp @Word64 timestamp) (Timers1 timer) \case
     Timers1 old -> TimersN [timer, old]
     TimersN old -> TimersN (timer : old)
 
@@ -372,15 +372,15 @@ atomicMaybeModifyArray buckets index doDelete = do
           if success then pure True else loop ticket1
 
 atomicExtractExpiredTimersFromBucket :: MutableArray RealWorld TimerBucket -> Int -> Timestamp -> IO TimerBucket
-atomicExtractExpiredTimersFromBucket buckets index now = do
+atomicExtractExpiredTimersFromBucket buckets index (coerce @Timestamp @Word64 -> now) = do
   ticket0 <- Atomics.readArrayElem buckets index
   loop ticket0
   where
     loop :: Atomics.Ticket TimerBucket -> IO TimerBucket
     loop ticket = do
-      let Pair expired bucket1 = TimestampMap.splitL now (Atomics.peekTicket ticket)
-      if TimestampMap.null expired
-        then pure TimestampMap.empty
+      let WordMap.Pair expired bucket1 = WordMap.splitL now (Atomics.peekTicket ticket)
+      if WordMap.null expired
+        then pure WordMap.empty
         else do
           (success, ticket1) <- Atomics.casArrayElem buckets index ticket bucket1
           if success then pure expired else loop ticket1
@@ -515,15 +515,15 @@ runTimerReaperThread buckets numTimers resolution = do
       where
         fireTimerBucket :: TimerBucket -> IO ()
         fireTimerBucket bucket0 =
-          case TimestampMap.pop bucket0 of
-            TimestampMap.PopNada -> pure ()
-            TimestampMap.PopAlgo timestamp timers bucket1 ->
+          case WordMap.pop bucket0 of
+            WordMap.PopNada -> pure ()
+            WordMap.PopAlgo timestamp timers bucket1 ->
               case timers of
                 Timers1 timer -> do
-                  expired2 <- fireTimer bucket1 timestamp timer
+                  expired2 <- fireTimer bucket1 (coerce @Word64 @Timestamp timestamp) timer
                   fireTimerBucket expired2
                 TimersN timers1 -> do
-                  bucket2 <- fireTimers bucket1 timestamp timers1
+                  bucket2 <- fireTimers bucket1 (coerce @Word64 @Timestamp timestamp) timers1
                   fireTimerBucket bucket2
 
         fireTimers :: TimerBucket -> Timestamp -> [Timer0] -> IO TimerBucket

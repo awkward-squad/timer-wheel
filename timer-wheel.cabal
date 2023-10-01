@@ -72,22 +72,22 @@ library
     primitive ^>= 0.7 || ^>= 0.8,
   exposed-modules:
     TimerWheel
-  hs-source-dirs: src
+  hs-source-dirs: src, src/wordmap
   other-modules:
     TimerWheel.Internal.Counter
     TimerWheel.Internal.Nanoseconds
     TimerWheel.Internal.Prelude
     TimerWheel.Internal.Timestamp
-    TimerWheel.Internal.TimestampMap
+    TimerWheel.Internal.WordMap
 
-test-suite tests
+test-suite timer-wheel-tests
   import: component
   build-depends:
     ki,
     random ^>= 1.2,
     timer-wheel,
   ghc-options: -threaded -with-rtsopts=-N2
-  hs-source-dirs: test
+  hs-source-dirs: test/timer-wheel
   main-is: Main.hs
   type: exitcode-stdio-1.0
 

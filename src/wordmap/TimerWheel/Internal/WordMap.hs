@@ -1,10 +1,10 @@
--- A Word64Map with code cribbed from containers and GHC
+-- An IntMap-like container with code cribbed from containers and GHC
+--
 -- TODO: proper code attribution
-module TimerWheel.Internal.TimestampMap
-  ( TimestampMap,
+module TimerWheel.Internal.WordMap
+  ( WordMap (..),
     delete,
     empty,
-    foreach,
     insert,
     lookup,
     null,
@@ -12,95 +12,79 @@ module TimerWheel.Internal.TimestampMap
     pop,
     splitL,
     upsert,
+
+    -- * Strict pair
+    Pair (..),
   )
 where
 
 import Data.Bits
 import Data.Word
-import TimerWheel.Internal.Nanoseconds (Nanoseconds (..))
 import TimerWheel.Internal.Prelude
-import TimerWheel.Internal.Timestamp (Timestamp (..))
 
-data TimestampMap a
-  = Bin
-      {-# UNPACK #-} !Prefix
-      {-# UNPACK #-} !Mask
-      !(TimestampMap a)
-      !(TimestampMap a)
+data WordMap a
+  = Bin {-# UNPACK #-} !Prefix {-# UNPACK #-} !Mask !(WordMap1 a) !(WordMap1 a)
   | Tip {-# UNPACK #-} !Word64 a
   | Nil
+
+-- A non-empty word map.
+type WordMap1 a = WordMap a
 
 type Prefix = Word64
 
 type Mask = Word64
 
-bin :: Prefix -> Mask -> TimestampMap a -> TimestampMap a -> TimestampMap a
+bin :: Prefix -> Mask -> WordMap a -> WordMap a -> WordMap a
 bin _ _ l Nil = l
 bin _ _ Nil r = r
 bin p m l r = Bin p m l r
 {-# INLINE bin #-}
 
-binCheckLeft :: Prefix -> Mask -> TimestampMap a -> TimestampMap a -> TimestampMap a
+binCheckLeft :: Prefix -> Mask -> WordMap a -> WordMap1 a -> WordMap1 a
 binCheckLeft _ _ Nil r = r
 binCheckLeft p m l r = Bin p m l r
 {-# INLINE binCheckLeft #-}
 
-binCheckRight :: Prefix -> Mask -> TimestampMap a -> TimestampMap a -> TimestampMap a
+binCheckRight :: Prefix -> Mask -> WordMap1 a -> WordMap a -> WordMap1 a
 binCheckRight _ _ l Nil = l
 binCheckRight p m l r = Bin p m l r
 {-# INLINE binCheckRight #-}
 
-delete :: forall a. Timestamp -> TimestampMap a -> TimestampMap a
-delete = coerce @(Word64 -> TimestampMap a -> TimestampMap a) delete_
-{-# INLINE delete #-}
+delete :: Word64 -> WordMap a -> WordMap a
+delete !k t =
+  case t of
+    Bin p m l r
+      | nomatch k p m -> t
+      | zero k m -> binCheckLeft p m (delete k l) r
+      | otherwise -> binCheckRight p m l (delete k r)
+    Tip kx _
+      | k == kx -> Nil
+      | otherwise -> t
+    Nil -> Nil
 
-delete_ :: Word64 -> TimestampMap a -> TimestampMap a
-delete_ !k = \case
-  t@(Bin p m l r)
-    | nomatch k p m -> t
-    | zero k m -> binCheckLeft p m (delete_ k l) r
-    | otherwise -> binCheckRight p m l (delete_ k r)
-  t@(Tip kx _)
-    | k == kx -> Nil
-    | otherwise -> t
-  Nil -> Nil
-
-empty :: TimestampMap a
+empty :: WordMap a
 empty =
   Nil
 {-# INLINE empty #-}
 
-foreach :: (Timestamp -> a -> IO ()) -> TimestampMap a -> IO ()
-foreach f =
-  go
-  where
-    go = \case
-      Nil -> pure ()
-      Tip k x -> f (coerce @Word64 @Timestamp k) x
-      Bin _ _ l r -> go l >> go r
-
-insert :: forall a. Timestamp -> a -> TimestampMap a -> TimestampMap a
-insert = coerce @(Word64 -> a -> TimestampMap a -> TimestampMap a) insert_
-{-# INLINE insert #-}
-
-insert_ :: Word64 -> a -> TimestampMap a -> TimestampMap a
-insert_ !k !x t =
+insert :: Word64 -> a -> WordMap a -> WordMap a
+insert !k !x t =
   case t of
     Bin p m l r
       | nomatch k p m -> link k (Tip k x) p t
-      | zero k m -> Bin p m (insert_ k x l) r
-      | otherwise -> Bin p m l (insert_ k x r)
+      | zero k m -> Bin p m (insert k x l) r
+      | otherwise -> Bin p m l (insert k x r)
     Tip ky _
       | k == ky -> Tip k x
       | otherwise -> link k (Tip k x) ky t
     Nil -> Tip k x
 
-link :: Prefix -> TimestampMap a -> Prefix -> TimestampMap a -> TimestampMap a
+link :: Prefix -> WordMap a -> Prefix -> WordMap a -> WordMap a
 link p1 t1 p2 = linkWithMask (branchMask p1 p2) p1 t1
 {-# INLINE link #-}
 
 -- `linkWithMask` is useful when the `branchMask` has already been computed
-linkWithMask :: Mask -> Prefix -> TimestampMap a -> TimestampMap a -> TimestampMap a
+linkWithMask :: Mask -> Prefix -> WordMap a -> WordMap a -> WordMap a
 linkWithMask m p0 t1 t2
   | zero p0 m = Bin p m t1 t2
   | otherwise = Bin p m t2 t1
@@ -108,42 +92,33 @@ linkWithMask m p0 t1 t2
     p = mask p0 m
 {-# INLINE linkWithMask #-}
 
-lookup :: forall a. Timestamp -> TimestampMap a -> Maybe a
-lookup = coerce @(Word64 -> TimestampMap a -> Maybe a) lookup_
-{-# INLINE lookup #-}
-
-lookup_ :: forall a. Word64 -> TimestampMap a -> Maybe a
-lookup_ !k =
+lookup :: forall a. Word64 -> WordMap a -> Maybe a
+lookup !k =
   go
   where
-    go :: TimestampMap a -> Maybe a
+    go :: WordMap a -> Maybe a
     go = \case
       Bin _ m l r -> go (if zero k m then l else r)
       Tip kx x -> if k == kx then Just x else Nothing
       Nil -> Nothing
 
-null :: TimestampMap a -> Bool
+null :: WordMap a -> Bool
 null = \case
   Nil -> True
   _ -> False
 {-# INLINE null #-}
 
-singleton :: Word64 -> a -> TimestampMap a
+singleton :: Word64 -> a -> WordMap a
 singleton k !x = Tip k x
 {-# INLINE singleton #-}
 
--- @splitL k xs@ splits @xs@ into @ys@ and @zs@, where every timestamp in @ys@ is less than or equal to @k@, and every
--- timestamp in @zs@ is greater than @k@.
-splitL :: forall a. Timestamp -> TimestampMap a -> Pair (TimestampMap a) (TimestampMap a)
-splitL = coerce @(Word64 -> TimestampMap a -> Pair (TimestampMap a) (TimestampMap a)) splitL_
-{-# INLINE splitL #-}
-
-splitL_ :: forall a. Word64 -> TimestampMap a -> Pair (TimestampMap a) (TimestampMap a)
-splitL_ k = \case
-  Bin p m l r | m < 0 -> mapPairL (\ll -> bin p m ll r) (go l)
-  t -> go t
+-- @splitL k xs@ splits @xs@ into @ys@ and @zs@, where every value in @ys@ is less than or equal to @k@, and every value
+-- in @zs@ is greater than @k@.
+splitL :: forall a. Word64 -> WordMap a -> Pair (WordMap a) (WordMap a)
+splitL k =
+  go
   where
-    go :: TimestampMap a -> Pair (TimestampMap a) (TimestampMap a)
+    go :: WordMap a -> Pair (WordMap a) (WordMap a)
     go = \case
       t@(Bin p m l r)
         | nomatch k p m ->
@@ -159,9 +134,9 @@ splitL_ k = \case
 
 data Pop a
   = PopNada
-  | PopAlgo !Timestamp !a !(TimestampMap a)
+  | PopAlgo !Word64 !a !(WordMap a)
 
-pop :: TimestampMap a -> Pop a
+pop :: WordMap a -> Pop a
 pop = \case
   Nil -> PopNada
   Bin p m l r0 | m < 0 ->
@@ -171,25 +146,21 @@ pop = \case
   t -> pop1 t
 {-# INLINE pop #-}
 
-pop1 :: TimestampMap a -> Pop a
+pop1 :: WordMap1 a -> Pop a
 pop1 = \case
   Bin p m l0 r ->
     case pop1 l0 of
       PopAlgo k x l1 -> PopAlgo k x (binCheckLeft p m l1 r)
       PopNada -> undefined
-  Tip k x -> PopAlgo (coerce @Word64 @Timestamp k) x Nil
+  Tip k x -> PopAlgo k x Nil
   Nil -> undefined
 
-upsert :: forall a. Timestamp -> a -> (a -> a) -> TimestampMap a -> TimestampMap a
-upsert = coerce @(Word64 -> a -> (a -> a) -> TimestampMap a -> TimestampMap a) upsert_
-{-# INLINE upsert #-}
-
-upsert_ :: Word64 -> a -> (a -> a) -> TimestampMap a -> TimestampMap a
-upsert_ !k x f = \case
+upsert :: Word64 -> a -> (a -> a) -> WordMap a -> WordMap a
+upsert !k x f = \case
   t@(Bin p m l r)
     | nomatch k p m -> link k (singleton k x) p t
-    | zero k m -> Bin p m (upsert_ k x f l) r
-    | otherwise -> Bin p m l (upsert_ k x f r)
+    | zero k m -> Bin p m (upsert k x f l) r
+    | otherwise -> Bin p m l (upsert k x f r)
   t@(Tip ky y)
     | k == ky -> Tip k $! f y
     | otherwise -> link k (singleton k x) ky t
@@ -227,3 +198,15 @@ branchMask p1 p2 =
 highestBitMask :: Word64 -> Word64
 highestBitMask w = unsafeShiftL 1 (63 - countLeadingZeros w)
 {-# INLINE highestBitMask #-}
+
+-- A strict pair
+data Pair a b
+  = Pair !a !b
+
+mapPairL :: (a -> b) -> Pair a x -> Pair b x
+mapPairL f (Pair x y) = Pair (f x) y
+{-# INLINE mapPairL #-}
+
+mapPairR :: (a -> b) -> Pair x a -> Pair x b
+mapPairR f (Pair x y) = Pair x (f y)
+{-# INLINE mapPairR #-}

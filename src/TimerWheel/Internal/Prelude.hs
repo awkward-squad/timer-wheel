@@ -1,8 +1,5 @@
 module TimerWheel.Internal.Prelude
-  ( Pair (..),
-    mapPairL,
-    mapPairR,
-    Seconds,
+  ( Seconds,
     module X,
   )
 where
@@ -14,18 +11,6 @@ import Data.IORef as X (IORef, newIORef, readIORef, writeIORef)
 import Data.Word as X (Word64)
 import GHC.Generics as X (Generic)
 import Prelude as X hiding (lookup, null)
-
--- A strict pair
-data Pair a b
-  = Pair !a !b
-
-mapPairL :: (a -> b) -> Pair a x -> Pair b x
-mapPairL f (Pair x y) = Pair (f x) y
-{-# INLINE mapPairL #-}
-
-mapPairR :: (a -> b) -> Pair x a -> Pair x b
-mapPairR f (Pair x y) = Pair x (f y)
-{-# INLINE mapPairR #-}
 
 -- | A number of seconds, with nanosecond precision.
 --
