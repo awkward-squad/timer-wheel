@@ -22,7 +22,7 @@ copyright: (c) 2018-2023 Mitchell Rosen, Travis Staton
 license: BSD-3-Clause
 license-file: LICENSE
 build-type: Simple
-tested-with: GHC == 9.2.7, GHC == 9.4.4, GHC == 9.6.1
+tested-with: GHC == 9.2.8, GHC == 9.4.7, GHC == 9.6.2
 
 extra-source-files:
   CHANGELOG.md
