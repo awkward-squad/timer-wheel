@@ -358,58 +358,131 @@ atomicExtractExpiredTimersFromBucket buckets index now = do
 
 ------------------------------------------------------------------------------------------------------------------------
 -- Timer reaper thread
-
+--
+-- The main loop is rather simple, but the code is somewhat fiddly. In brief, the reaper thread wakes up to fire all of
+-- the expired timers in bucket N, then sleeps, then wakes up to fire all of the expired timers in bucket N+1, then
+-- sleeps, and so on, forever.
+--
+-- It wakes up on the "bucket boundaries", that is,
+--
+--   +------+------+------+------+------+------+------+------+------+------+
+--   |      |      |      |      |      |      |      |      |      |      |
+--   |      |      |      |      |      |      |      |      |      |      |
+--   +------+------+------+------+------+------+------+------+------+------+
+--                           ^   ^
+--                           |   we wake up around here
+--                           |
+--                           to fire all of the expired timers stored here
+--
+-- It's entirely possible the reaper thread gets hopelessly behind, that is, it's taken so long to expire all of the
+-- timers in previous buckets that we're behind schedule an entire bucket or more. That might look like this:
+--
+--   +------+------+------+------+------+------+------+------+------+------+
+--   |      |      |      |      |      |      |      |      |      |      |
+--   |      |      |      |      |      |      |      |      |      |      |
+--   +------+------+------+------+------+------+------+------+------+------+
+--                           ^                    ^
+--                           |                    we are very behind, and enter the loop around here
+--                           |
+--                           yet we nonetheless fire all of the expired timers stored here, as if we were on time
+--
+-- That's accomplished simplly by maintaining in the loop state the "ideal" time that we wake up, ignoring reality. We
+-- only ultimately check the *actual* current time when determining how long to *sleep* after expiring all of the timers
+-- in the current bucket. If we're behind schedule, we won't sleep at all.
+--
+--   +------+------+------+------+------+------+------+------+------+------+
+--   |      |      |      |      |      |      |      |      |      |      |
+--   |      |      |      |      |      |      |      |      |      |      |
+--   +------+------+------+------+------+------+------+------+------+------+
+--                           ^   ^                  ^
+--                           |   |                  |
+--                           |   we enter the loop with this "ideal" time
+--                           |                      |
+--                           to fire timers in here |
+--                                                  |
+--                                                  not caring how far ahead the actual current time is
+--
+-- On to expiring timers: a "bucket" of timers is stored at each array index, which can be partitioned into "expired"
+-- (meant to fire at or before the ideal time) and "not expired" (to expire on a subsequent wrap around the bucket
+-- array).
+--
+--   +-----------------------+
+--   |           /           |
+--   | expired  /            |
+--   |         / not expired |
+--   |        /              |
+--   +-----------------------+
+--
+-- The reaper thread simply atomically partitions the bucket, keeping the expired collection for itself, and putting the
+-- not-expired collection back in the array.
+--
+-- Next, the timers are carefully fired one-by-one, in timestamp order. It's possible that two or more timers are
+-- scheduled to expire concurrently (i.e. on the same nanosecond); that's fine: we fire them in the order they were
+-- scheduled.
+--
+-- Let's say this is our set of timers to fire.
+--
+--    Ideal time         Timers to fire
+--   +--------------+   +-----------------------------+
+--   | 700          |   | Expiry | Type               |
+--   +--------------+   +--------+--------------------+
+--                      | 630    | One-shot           |
+--    Next ideal time   | 643    | Recurring every 10 |
+--   +--------------+   | 643    | One-shot           |
+--   | 800          |   | 689    | Recurring every 80 |
+--   +--------------+   +--------+--------------------+
+--
+-- Expiring a one-shot timer is simple: call the IO action and move on.
+--
+-- Expiring a recurring timer is less simple (but still simple): call the IO action, then schedule the next occurrence.
+-- There are two possibilities.
+--
+--   1. The next occurrence is *at or before* the ideal time, which means it ought to fire along with the other timers
+--      in the queue, right now. So, insert it into the collection of timers to fire.
+--
+--   2. The next occurrence is *after* the ideal time, so enqueue it in the array of buckets wherever it belongs.
+--
+-- After all expired timers are fired, the reaper thread has one last decision to make: how long should we sleep? We
+-- get the current timestamp, and if it's still before the next ideal time (i.e. the current ideal time plus the wheel
+-- resolution), then we sleep for the difference.
+--
+-- If the actual time is at or after the next ideal time, that's kind of bad - it means the reaper thread is behind
+-- schedule. The user's enqueued actions have taken too long, or their wheel resolution is too short. Anyway, it's not
+-- our problem, our behavior doesn't change per whether we are behind schedule or not.
 runTimerReaperThread :: MutableArray RealWorld TimerBucket -> Counter -> Nanoseconds -> IO void
 runTimerReaperThread buckets numTimers resolution = do
   -- Sleep until the very first bucket of timers expires
+  --
+  --     resolution                         = 100
+  --     now                                = 184070
+  --     progress   = now % resolution      = 70
+  --     remaining  = resolution - progress = 30
+  --     idealTime  = now + remaining       = 184100
+  --
+  --   +-------------------------+----------------+---------
+  --   | progress = 70           | remaining = 30 |
+  --   +-------------------------+----------------+
+  --   | resolution = 100                         |
+  --   +------------------------------------------+---------
+  --                             ^                ^
+  --                             now              idealTime
   now <- Timestamp.now
-  let remainingBucketNanos = resolution `Nanoseconds.unsafeMinus` (now `Timestamp.intoEpoch` resolution)
-  Nanoseconds.sleep remainingBucketNanos
-
-  loop (now `Timestamp.plus` remainingBucketNanos) (timestampToIndex buckets resolution now)
+  let progress = now `Timestamp.intoEpoch` resolution
+  let remaining = resolution `Nanoseconds.unsafeMinus` progress
+  Nanoseconds.sleep remaining
+  -- Enter the Loop™
+  let idealTime = now `Timestamp.plus` remaining
+  theLoop idealTime (timestampToIndex buckets resolution now)
   where
-    --   +----+----+----+----+----+----+
-    --   |    |    |    |    |    |    |
-    --   +----+----+----+----+----+----+
-    --     ^  ^    ^
-    --     |  |    nextTime = 7418238000
-    --     |  |
-    --     |  thisTime = 7418237000
-    --     |
-    --     index = 0
-    --
-    -- `loop thisTime index` does this in a loop:
-    --
-    --   1. Expires all timers at `index`, per `thisTime` (which may be arbitrarily behind reality)
-    --   2. Sleeps until `nextTime`
-    --   3. Loops with `thisTime = nextTime`, `index = index + 1`
-    --
-    -- Under "normal" conditions, wherein the timer thread can keep up with the timer actions, we'll be in a loop like
-    -- this (using small numbers for monotonic timestamps, for readability)
-    --
-    --   1. Enter loop with `thisTime = 1000`, `index = 4`, and the actual timestamp is something like `now = 1004`,
-    --      later than `thisTime` due to thread scheduling and such, but not by much.
-    --   2. Expire all timers at `index = 4` whose expiry is <= 1000 (`thisTime`)
-    --   3. Get the current time `now = 1150`
-    --   4. Sleep for `2000 - 1150 = 850`
-    --   5. Re-enter the loop with `thisTime = 2000`, `index = 5`
-    --
-    -- But things still work even if the reaper thread gets hopelessly behind schedule:
-    --
-    --   1. Enter loop with `thisTime = 1000`, `index = 4`, and the actual timestamp is something like `now = 3050`.
-    --   2. Expire all timers at `index = 4` whose expiry is <= 1000 (`thisTime`)
-    --   3. Re-enter the loop with `thisTime = 2000`, `index = 5`
-    --
-    -- Critically, we have not accidentally skipped ahead to the actual index that corresponds to `now`; rather, we
-    -- always advance bucket-by-bucket no matter what the actual current timestamp is.
-    loop :: Timestamp -> Int -> IO void
-    loop !thisTime !index = do
-      expired <- atomicExtractExpiredTimersFromBucket buckets index thisTime
+    -- `index` could be derived from `thisTime`, but it's cheaper to just store it separately and bump by 1 as we go
+    theLoop :: Timestamp -> Int -> IO void
+    theLoop !idealTime !index = do
+      expired <- atomicExtractExpiredTimersFromBucket buckets index idealTime
       fireTimerBucket expired
-      let !nextTime = thisTime `Timestamp.plus` resolution
+      let !nextIdealTime = idealTime `Timestamp.plus` resolution
       now <- Timestamp.now
-      when (nextTime > now) (Nanoseconds.sleep (nextTime `Timestamp.unsafeMinus` now))
-      loop nextTime ((index + 1) `rem` Array.sizeofMutableArray buckets)
+      when (nextIdealTime > now) (Nanoseconds.sleep (nextIdealTime `Timestamp.unsafeMinus` now))
+      theLoop nextIdealTime ((index + 1) `rem` Array.sizeofMutableArray buckets)
       where
         fireTimerBucket :: TimerBucket -> IO ()
         fireTimerBucket bucket0 =
@@ -452,7 +525,7 @@ runTimerReaperThread buckets numTimers resolution = do
           where
             scheduleNextOccurrence :: Timestamp -> IO TimerBucket
             scheduleNextOccurrence nextOccurrence =
-              if nextOccurrence < thisTime
+              if nextOccurrence < idealTime
                 then pure $! insertNextOccurrence bucket
                 else do
                   atomicModifyArray
