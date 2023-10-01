@@ -49,7 +49,7 @@ common component
     MultiParamTypeClasses
     NamedFieldPuns
     NoImplicitPrelude
-    RecursiveDo
+    NumericUnderscores
     ScopedTypeVariables
     TupleSections
     TypeApplications
@@ -89,6 +89,8 @@ library
 test-suite tests
   import: component
   build-depends:
+    ki,
+    random ^>= 1.2,
     timer-wheel,
   ghc-options: -threaded -with-rtsopts=-N2
   hs-source-dirs: test

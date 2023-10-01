@@ -20,6 +20,7 @@ module TimerWheel
 where
 
 import qualified Data.Atomics as Atomics
+import Data.Functor (void)
 import Data.Primitive.Array (MutableArray)
 import qualified Data.Primitive.Array as Array
 import GHC.Base (RealWorld)
@@ -153,8 +154,10 @@ register ::
   IO () ->
   -- | An action that attempts to cancel the timer
   IO (IO Bool)
-register wheel delay =
-  registerImpl wheel (Nanoseconds.fromSeconds delay)
+register wheel@TimerWheel {numTimers} delay action = do
+  now <- Timestamp.now
+  incrCounter_ numTimers
+  registerOneShotAt wheel (now `Timestamp.plus` Nanoseconds.fromSeconds delay) action
 
 -- | Like 'register', but for when you don't intend to cancel the timer.
 register_ ::
@@ -165,26 +168,26 @@ register_ ::
   -- | The action to fire
   IO () ->
   IO ()
-register_ wheel delay action = do
-  _ <- register wheel delay action
-  pure ()
+register_ wheel delay action =
+  void (register wheel delay action)
 
-registerImpl :: TimerWheel -> Nanoseconds -> IO () -> IO (IO Bool)
-registerImpl TimerWheel {buckets, numTimers, resolution, timerIdSupply} delay action = do
-  now <- Timestamp.now
-  incrCounter_ numTimers
+registerOneShotAt :: TimerWheel -> Timestamp -> IO () -> IO (IO Bool)
+registerOneShotAt TimerWheel {buckets, numTimers, resolution, timerIdSupply} timestamp action = do
   timerId <- incrCounter timerIdSupply
-  let timestamp = now `Timestamp.plus` delay
-  let index = timestampToIndex buckets resolution timestamp
-  atomicModifyArray buckets index (timerBucketInsert timestamp (Timer timerId action))
-  pure (atomicMaybeModifyArray buckets index (timerBucketDelete timestamp timerId))
+  atomicModifyArray buckets index (timerBucketInsert timestamp (OneShot timerId action))
+  pure do
+    deleted <- atomicMaybeModifyArray buckets index (timerBucketDelete timestamp timerId)
+    when deleted (decrCounter_ numTimers)
+    pure deleted
+  where
+    index :: Int
+    index =
+      timestampToIndex buckets resolution timestamp
 
 -- | @recurring wheel action delay@ registers an action __@action@__ in timer wheel __@wheel@__ to fire every
--- __@delay@__ seconds (but no more often than __@wheel@__'s /resolution/).
+-- __@delay@__ seconds.
 --
 -- Returns an action that, when called, cancels the recurring timer.
---
--- Note: it is possible (though very unlikely) for a canceled timer to fire one time after its cancelation.
 recurring ::
   -- | The timer wheel
   TimerWheel ->
@@ -194,46 +197,17 @@ recurring ::
   IO () ->
   -- | An action that cancels the recurring timer
   IO (IO ())
-recurring wheel (Nanoseconds.fromSeconds -> delay) action = do
-  -- Hold the cancel action for the recurring timer in a mutable cell. Each time the timer is registered, this cancel
-  -- action is updated accordingly to the latest.
-  tryCancelRef <- newIORef undefined
-
-  -- The action for a recurring timer first registers the next firing of the action, then updates the cancel action,
-  -- then performs the action.
-  let doAction :: IO ()
-      doAction = do
-        tryCancel <- reregister wheel delay doAction
-        writeIORef tryCancelRef tryCancel
-        -- At this moment, we've written the cancel action for the *next* recurring timer, but haven't executed *this*
-        -- action. That means it's possible for the user to cancel the recurring timer, *then* observe this one last
-        -- action. That seems fine, though - our semantics of "cancelation" are just "will be canceled eventually" (and,
-        -- more precisely, happen to be "will occur at most one more time, but usually zero").
-        action
-
-  -- Register the first occurrence of the timer (which will re-register itself when it fires, and on and on).
-  tryCancel0 <- registerImpl wheel delay doAction
-  writeIORef tryCancelRef tryCancel0
-
-  -- Track whether or not this recurring timer has been canceled, so we don't enter an infinite loop if the user
-  -- accidentally calls cancel more than once.
+recurring TimerWheel {buckets, numTimers, resolution, timerIdSupply} (Nanoseconds.fromSeconds -> delay) action = do
+  now <- Timestamp.now
+  incrCounter_ numTimers
+  let timestamp = now `Timestamp.plus` delay
+  let index = timestampToIndex buckets resolution timestamp
+  timerId <- incrCounter timerIdSupply
   canceledRef <- newIORef False
-
-  -- Return an action that attempt to cancel the timer over and over until success. It's very unlikely that any given
-  -- attempt to cancel doesn't succeed, but it's possible with this thread interleaving:
-  --
-  --   1. User thread reads `tryCancel` from `tryCancelRef`.
-  --   2. Reaper thread performs `doAction` to completion, which registers the next occurrence and performs the action.
-  --   3. User thread calls `tryCancel`, observing that the associated action was already performed.
-  let cancel = do
-        readIORef canceledRef >>= \case
-          True -> pure ()
-          False -> do
-            tryCancel <- readIORef tryCancelRef
-            tryCancel >>= \case
-              True -> writeIORef canceledRef True
-              False -> cancel
-  pure cancel
+  atomicModifyArray buckets index (timerBucketInsert timestamp (Recurring timerId action delay canceledRef))
+  pure do
+    writeIORef canceledRef True
+    decrCounter_ numTimers
 
 -- | Like 'recurring', but for when you don't intend to cancel the timer.
 recurring_ ::
@@ -243,34 +217,13 @@ recurring_ ::
   -- | The action to fire repeatedly
   IO () ->
   IO ()
-recurring_ wheel (Nanoseconds.fromSeconds -> delay) action = do
-  _ <- registerImpl wheel delay doAction
-  pure ()
-  where
-    doAction :: IO ()
-    doAction = do
-      _ <- reregister wheel delay doAction
-      action
-
--- Re-register one bucket early, to account for the fact that timers are
--- expired at the *end* of a bucket.
---
--- +---+---+---+---+
--- { A |   |   |   }
--- +---+---+---+---+
---      |
---      The reaper thread fires 'A' approximately here, so if it's meant
---      to be repeated every two buckets, and we just re-register it at
---      this time, three buckets will pass before it's run again. So, we
---      act as if it's still "one bucket ago" at the moment we re-register
---      it.
-reregister :: TimerWheel -> Nanoseconds -> IO () -> IO (IO Bool)
-reregister wheel@TimerWheel {resolution} delay =
-  registerImpl
-    wheel
-    if resolution > delay
-      then Nanoseconds 0
-      else delay `Nanoseconds.unsafeMinus` resolution
+recurring_ TimerWheel {buckets, numTimers, resolution, timerIdSupply} (Nanoseconds.fromSeconds -> delay) action = do
+  now <- Timestamp.now
+  incrCounter_ numTimers
+  let timestamp = now `Timestamp.plus` delay
+  let index = timestampToIndex buckets resolution timestamp
+  timerId <- incrCounter timerIdSupply
+  atomicModifyArray buckets index (timerBucketInsert timestamp (Recurring_ timerId action delay))
 
 -- | Get the number of timers in a timer wheel.
 --
@@ -314,8 +267,8 @@ timerBucketDelete :: Timestamp -> TimerId -> TimerBucket -> Maybe TimerBucket
 timerBucketDelete timestamp timerId bucket =
   case TimestampMap.lookup timestamp bucket of
     Nothing -> Nothing
-    Just (Timers1 (Timer timerId1 _))
-      | timerId == timerId1 -> Just $! TimestampMap.delete timestamp bucket
+    Just (Timers1 timer)
+      | timerId == getTimerId timer -> Just $! TimestampMap.delete timestamp bucket
       | otherwise -> Nothing
     Just (TimersN timers0) ->
       case timersDelete timerId timers0 of
@@ -333,23 +286,6 @@ timerBucketInsert timestamp timer =
     Timers1 old -> TimersN [timer, old]
     TimersN old -> TimersN (timer : old)
 
--- Fire every timer in a bucket, in order
-timerBucketFire :: Counter -> TimerBucket -> IO ()
-timerBucketFire numTimers =
-  TimestampMap.foreach \_ -> \case
-    Timers1 timer -> timerActionThenDecr timer
-    TimersN timers -> foldr f (pure ()) timers
-  where
-    f :: Timer -> IO () -> IO ()
-    f timer acc = do
-      acc
-      timerActionThenDecr timer
-
-    timerActionThenDecr :: Timer -> IO ()
-    timerActionThenDecr timer = do
-      timerAction timer
-      decrCounter_ numTimers
-
 data Timers
   = Timers1 {-# UNPACK #-} !Timer
   | -- 2+ timers, stored in the reverse order that they were enqueued (so the last should fire first)
@@ -362,17 +298,20 @@ timersDelete timerId =
     go :: [Timer] -> Maybe [Timer]
     go = \case
       [] -> Nothing
-      Timer timerId1 _ : timers | timerId == timerId1 -> Just timers
-      timer : timers -> (timer :) <$> go timers
+      timer : timers
+        | timerId == getTimerId timer -> Just timers
+        | otherwise -> (timer :) <$> go timers
 
 data Timer
-  = Timer
-      !TimerId
-      !(IO ())
+  = OneShot !TimerId !(IO ())
+  | Recurring !TimerId !(IO ()) !Nanoseconds !(IORef Bool)
+  | Recurring_ !TimerId !(IO ()) !Nanoseconds
 
-timerAction :: Timer -> IO ()
-timerAction = \case
-  Timer _ action -> action
+getTimerId :: Timer -> TimerId
+getTimerId = \case
+  OneShot timerId _ -> timerId
+  Recurring timerId _ _ _ -> timerId
+  Recurring_ timerId _ _ -> timerId
 
 type TimerId =
   Int
@@ -465,9 +404,63 @@ runTimerReaperThread buckets numTimers resolution = do
     -- always advance bucket-by-bucket no matter what the actual current timestamp is.
     loop :: Timestamp -> Int -> IO void
     loop !thisTime !index = do
-      let !nextTime = thisTime `Timestamp.plus` resolution
       expired <- atomicExtractExpiredTimersFromBucket buckets index thisTime
-      timerBucketFire numTimers expired
+      fireTimerBucket expired
+      let !nextTime = thisTime `Timestamp.plus` resolution
       now <- Timestamp.now
       when (nextTime > now) (Nanoseconds.sleep (nextTime `Timestamp.unsafeMinus` now))
       loop nextTime ((index + 1) `rem` Array.sizeofMutableArray buckets)
+      where
+        fireTimerBucket :: TimerBucket -> IO ()
+        fireTimerBucket bucket0 =
+          case TimestampMap.pop bucket0 of
+            TimestampMap.PopNada -> pure ()
+            TimestampMap.PopAlgo timestamp timers bucket1 ->
+              case timers of
+                Timers1 timer -> do
+                  expired2 <- fireTimer bucket1 timestamp timer
+                  fireTimerBucket expired2
+                TimersN timers1 -> do
+                  bucket2 <- fireTimers bucket1 timestamp timers1
+                  fireTimerBucket bucket2
+
+        fireTimers :: TimerBucket -> Timestamp -> [Timer] -> IO TimerBucket
+        fireTimers bucket timestamp =
+          foldr step (pure bucket)
+          where
+            step :: Timer -> IO TimerBucket -> IO TimerBucket
+            step timer earlier = do
+              expired1 <- earlier
+              fireTimer expired1 timestamp timer
+
+        fireTimer :: TimerBucket -> Timestamp -> Timer -> IO TimerBucket
+        fireTimer bucket timestamp timer =
+          case timer of
+            OneShot _ action -> do
+              action
+              decrCounter_ numTimers
+              pure bucket
+            Recurring _ action delay canceledRef ->
+              readIORef canceledRef >>= \case
+                True -> pure bucket
+                False -> do
+                  action
+                  scheduleNextOccurrence (timestamp `Timestamp.plus` delay)
+            Recurring_ _ action delay -> do
+              action
+              scheduleNextOccurrence (timestamp `Timestamp.plus` delay)
+          where
+            scheduleNextOccurrence :: Timestamp -> IO TimerBucket
+            scheduleNextOccurrence nextOccurrence =
+              if nextOccurrence < thisTime
+                then pure $! insertNextOccurrence bucket
+                else do
+                  atomicModifyArray
+                    buckets
+                    (timestampToIndex buckets resolution nextOccurrence)
+                    insertNextOccurrence
+                  pure bucket
+              where
+                insertNextOccurrence :: TimerBucket -> TimerBucket
+                insertNextOccurrence =
+                  timerBucketInsert nextOccurrence timer

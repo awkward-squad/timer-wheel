@@ -1,5 +1,3 @@
-{-# LANGUAGE NumericUnderscores #-}
-
 import Control.Exception (evaluate)
 import Control.Monad (replicateM)
 import Data.Foldable (for_)

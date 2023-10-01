@@ -2,12 +2,14 @@
 
 - Add `count`, which returns the number of timers in a timer wheel
 - Add `Seconds` type alias for readability
-- `create` / `with` no longer throw an exception if given an invalid config; rather, the config's invalid values are
+- Make `create` / `with` no longer throw an exception if given an invalid config; rather, the config's invalid values are
   replaced with sensible defaults
-- `recurring` / `recurring_` no longer throw an exception if given a negative delay
+- Make `recurring` / `recurring_` handle delays that are shorter than the wheel resolution more correctly
+- Make `recurring` / `recurring_` no longer throw an exception if given a negative delay
 - Replace `array` with `primitive`
 - Make calling `cancel` more than once on a recurring timer not enter an infinite loop
-- Slightly improve timer insert performance
+- Make timers that expire in the same batch no longer fire in an arbitrary order
+- Simplify and optimize internals
 
 ## [0.4.0.1] - 2022-11-05
 

@@ -8,6 +8,8 @@ module TimerWheel.Internal.TimestampMap
     insert,
     lookup,
     null,
+    Pop (..),
+    pop,
     splitL,
     upsert,
   )
@@ -154,6 +156,29 @@ splitL_ k = \case
         | k >= k2 -> Pair t Nil
         | otherwise -> Pair Nil t
       Nil -> Pair Nil Nil
+
+data Pop a
+  = PopNada
+  | PopAlgo !Timestamp !a !(TimestampMap a)
+
+pop :: TimestampMap a -> Pop a
+pop = \case
+  Nil -> PopNada
+  Bin p m l r0 | m < 0 ->
+    case pop1 r0 of
+      PopAlgo k x r1 -> PopAlgo k x (binCheckRight p m l r1)
+      PopNada -> undefined
+  t -> pop1 t
+{-# INLINE pop #-}
+
+pop1 :: TimestampMap a -> Pop a
+pop1 = \case
+  Bin p m l0 r ->
+    case pop1 l0 of
+      PopAlgo k x l1 -> PopAlgo k x (binCheckLeft p m l1 r)
+      PopNada -> undefined
+  Tip k x -> PopAlgo (coerce @Word64 @Timestamp k) x Nil
+  Nil -> undefined
 
 upsert :: forall a. Timestamp -> a -> (a -> a) -> TimestampMap a -> TimestampMap a
 upsert = coerce @(Word64 -> a -> (a -> a) -> TimestampMap a -> TimestampMap a) upsert_
