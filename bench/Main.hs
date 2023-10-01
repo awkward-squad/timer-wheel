@@ -3,11 +3,11 @@ import Control.Monad (replicateM)
 import Data.Foldable (for_)
 import GHC.Conc (atomically)
 import qualified Ki
-import Prelude
 import qualified System.Random as Random
 import qualified System.Random.Stateful as Random
 import Test.Tasty.Bench
-import qualified TimerWheel
+import TimerWheel
+import Prelude
 
 main :: IO ()
 main = do
@@ -25,11 +25,11 @@ main1 = do
   _ <- evaluate (sum delays)
 
   defaultMain
-    [ bench "insert" (whnfIO (insertN (map (realToFrac @Double @TimerWheel.Seconds) delays)))
+    [ bench "insert 1m" (whnfIO (insertN (map (realToFrac @Double @Seconds) delays)))
     ]
 
-insertN :: [TimerWheel.Seconds] -> IO ()
+insertN :: [Seconds] -> IO ()
 insertN delays =
-  TimerWheel.with TimerWheel.Config {spokes = 1024, resolution = 1} \wheel -> do
+  with Config {spokes = 1024, resolution = 1} \wheel -> do
     for_ delays \delay -> do
-      TimerWheel.register wheel delay (pure ())
+      register wheel delay (pure ())

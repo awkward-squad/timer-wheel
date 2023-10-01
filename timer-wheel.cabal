@@ -73,7 +73,6 @@ library
   import: component
   build-depends:
     atomic-primops ^>= 0.8,
-    containers ^>= 0.6 || ^>= 0.7,
     ki ^>= 1.0.0,
     primitive ^>= 0.7 || ^>= 0.8,
   exposed-modules:

@@ -19,6 +19,7 @@ module TimerWheel
   )
 where
 
+import Control.Exception (mask_)
 import qualified Data.Atomics as Atomics
 import Data.Functor (void)
 import Data.Primitive.Array (MutableArray)
@@ -143,8 +144,8 @@ with config action =
 -- | @register wheel delay action@ registers an action __@action@__ in timer wheel __@wheel@__ to fire after __@delay@__
 -- seconds.
 --
--- Returns an action that, when called, attempts to cancel the timer, and returns whether or not it was successful
--- (@False@ means the timer has already fired, or has already been cancelled).
+-- Returns an action that attempts to cancel the timer, and returns whether or not it was successful (@False@ means the
+-- timer has already fired, or has already been cancelled).
 register ::
   -- | The timer wheel
   TimerWheel ->
@@ -154,10 +155,19 @@ register ::
   IO () ->
   -- | An action that attempts to cancel the timer
   IO (IO Bool)
-register wheel@TimerWheel {numTimers} delay action = do
+register TimerWheel {buckets, numTimers, resolution, timerIdSupply} delay action = do
   now <- Timestamp.now
-  incrCounter_ numTimers
-  registerOneShotAt wheel (now `Timestamp.plus` Nanoseconds.fromSeconds delay) action
+  let timestamp = now `Timestamp.plus` Nanoseconds.fromSeconds delay
+  let index = timestampToIndex buckets resolution timestamp
+  timerId <- incrCounter timerIdSupply
+  mask_ do
+    atomicModifyArray buckets index (timerBucketInsert timestamp (OneShot timerId action))
+    incrCounter_ numTimers
+  pure do
+    mask_ do
+      deleted <- atomicMaybeModifyArray buckets index (timerBucketDelete timestamp timerId)
+      when deleted (decrCounter_ numTimers)
+      pure deleted
 
 -- | Like 'register', but for when you don't intend to cancel the timer.
 register_ ::
@@ -171,23 +181,10 @@ register_ ::
 register_ wheel delay action =
   void (register wheel delay action)
 
-registerOneShotAt :: TimerWheel -> Timestamp -> IO () -> IO (IO Bool)
-registerOneShotAt TimerWheel {buckets, numTimers, resolution, timerIdSupply} timestamp action = do
-  timerId <- incrCounter timerIdSupply
-  atomicModifyArray buckets index (timerBucketInsert timestamp (OneShot timerId action))
-  pure do
-    deleted <- atomicMaybeModifyArray buckets index (timerBucketDelete timestamp timerId)
-    when deleted (decrCounter_ numTimers)
-    pure deleted
-  where
-    index :: Int
-    index =
-      timestampToIndex buckets resolution timestamp
-
 -- | @recurring wheel action delay@ registers an action __@action@__ in timer wheel __@wheel@__ to fire every
 -- __@delay@__ seconds.
 --
--- Returns an action that, when called, cancels the recurring timer.
+-- Returns an action that cancels the recurring timer.
 recurring ::
   -- | The timer wheel
   TimerWheel ->
@@ -199,15 +196,17 @@ recurring ::
   IO (IO ())
 recurring TimerWheel {buckets, numTimers, resolution, timerIdSupply} (Nanoseconds.fromSeconds -> delay) action = do
   now <- Timestamp.now
-  incrCounter_ numTimers
   let timestamp = now `Timestamp.plus` delay
   let index = timestampToIndex buckets resolution timestamp
   timerId <- incrCounter timerIdSupply
   canceledRef <- newIORef False
-  atomicModifyArray buckets index (timerBucketInsert timestamp (Recurring timerId action delay canceledRef))
+  mask_ do
+    atomicModifyArray buckets index (timerBucketInsert timestamp (Recurring timerId action delay canceledRef))
+    incrCounter_ numTimers
   pure do
-    writeIORef canceledRef True
-    decrCounter_ numTimers
+    mask_ do
+      writeIORef canceledRef True
+      decrCounter_ numTimers
 
 -- | Like 'recurring', but for when you don't intend to cancel the timer.
 recurring_ ::
@@ -219,11 +218,12 @@ recurring_ ::
   IO ()
 recurring_ TimerWheel {buckets, numTimers, resolution, timerIdSupply} (Nanoseconds.fromSeconds -> delay) action = do
   now <- Timestamp.now
-  incrCounter_ numTimers
   let timestamp = now `Timestamp.plus` delay
   let index = timestampToIndex buckets resolution timestamp
   timerId <- incrCounter timerIdSupply
-  atomicModifyArray buckets index (timerBucketInsert timestamp (Recurring_ timerId action delay))
+  mask_ do
+    atomicModifyArray buckets index (timerBucketInsert timestamp (Recurring_ timerId action delay))
+    incrCounter_ numTimers
 
 -- | Get the number of timers in a timer wheel.
 --
