@@ -9,7 +9,7 @@ where
 
 import Control.Monad as X (when)
 import Data.Coerce as X (coerce)
-import Data.Fixed (E6, Fixed)
+import Data.Fixed (E9, Fixed)
 import Data.IORef as X (IORef, newIORef, readIORef, writeIORef)
 import Data.Word as X (Word64)
 import GHC.Generics as X (Generic)
@@ -27,11 +27,11 @@ mapPairR :: (a -> b) -> Pair x a -> Pair x b
 mapPairR f (Pair x y) = Pair x (f y)
 {-# INLINE mapPairR #-}
 
--- | A number of seconds, with microsecond precision.
+-- | A number of seconds, with nanosecond precision.
 --
 -- You can use numeric literals to construct a value of this type, e.g. @0.5@.
 --
 -- Otherwise, to convert from a type like @Int@ or @Double@, you can use the generic numeric conversion function
 -- @realToFrac@.
 type Seconds =
-  Fixed E6
+  Fixed E9

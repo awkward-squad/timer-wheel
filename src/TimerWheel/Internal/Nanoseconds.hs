@@ -29,7 +29,7 @@ fromSeconds =
 -- What you get for your troubles: one puny fewer int comparisons.
 fromNonNegativeSeconds :: Seconds -> Nanoseconds
 fromNonNegativeSeconds seconds =
-  Nanoseconds (coerce @(Integer -> Word64) fromIntegral seconds * 1000)
+  Nanoseconds (coerce @(Integer -> Word64) fromIntegral seconds)
 
 div :: Nanoseconds -> Nanoseconds -> Nanoseconds
 div =
