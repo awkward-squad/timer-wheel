@@ -106,7 +106,7 @@ data Config = Config
   { -- | Spoke count
     spokes :: {-# UNPACK #-} !Int,
     -- | Resolution
-    resolution :: {-# UNPACK #-} !Seconds
+    resolution :: !Seconds
   }
   deriving stock (Generic, Show)
 
@@ -287,7 +287,7 @@ timerBucketInsert timestamp timer =
     TimersN old -> TimersN (timer : old)
 
 data Timers
-  = Timers1 {-# UNPACK #-} !Timer
+  = Timers1 !Timer
   | -- 2+ timers, stored in the reverse order that they were enqueued (so the last should fire first)
     TimersN ![Timer]
 
