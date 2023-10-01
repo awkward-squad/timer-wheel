@@ -1,3 +1,7 @@
+-- | This module is intended to be imported qualified:
+--
+-- > import TimerWheel (TimerWheel)
+-- > import TimerWheel qualified
 module TimerWheel
   ( -- * Timer wheel
     TimerWheel,
