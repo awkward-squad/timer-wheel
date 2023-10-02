@@ -294,10 +294,10 @@ type TimerBucket =
 
 timerBucketDelete :: Timestamp -> TimerId -> TimerBucket -> Maybe TimerBucket
 timerBucketDelete (coerce @Timestamp @Word64 -> timestamp) timerId bucket =
-  case WordMap.lookup timestamp bucket of
+  case WordMap.lookupExpectingHit timestamp bucket of
     Nothing -> Nothing
     Just (Timers1 timer)
-      | timerId == getTimerId timer -> Just $! WordMap.delete timestamp bucket
+      | timerId == getTimerId timer -> Just $! WordMap.deleteExpectingHit timestamp bucket
       | otherwise -> Nothing
     Just (TimersN timers0) ->
       case timersDelete timerId timers0 of
@@ -379,7 +379,7 @@ atomicExtractExpiredTimersFromBucket buckets index (coerce @Timestamp @Word64 ->
     loop :: Atomics.Ticket TimerBucket -> IO TimerBucket
     loop ticket = do
       let WordMap.Pair expired bucket1 = WordMap.splitL now (Atomics.peekTicket ticket)
-      if WordMap.null expired
+      if WordMap.isEmpty expired
         then pure WordMap.empty
         else do
           (success, ticket1) <- Atomics.casArrayElem buckets index ticket bucket1

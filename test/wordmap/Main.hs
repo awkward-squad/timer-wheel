@@ -29,24 +29,27 @@ main1 =
 tests :: [(Hedgehog.PropertyName, Hedgehog.Property)]
 tests =
   [ ( "insert lookup",
-      Hedgehog.property do
-        keys <- Hedgehog.forAll (Gen.list (Range.linear 1 1000) (Gen.word64 Range.linearBounded))
-        let m = listToWordMap (map (,()) keys)
-        for_ keys \key ->
-          WordMap.lookup key m === Just ()
+      Hedgehog.withTests 1000 do
+        Hedgehog.property do
+          keys <- Hedgehog.forAll (Gen.list (Range.linear 1 1000) (Gen.word64 Range.linearBounded))
+          let m = listToWordMap (map (,()) keys)
+          for_ keys \key ->
+            WordMap.lookupExpectingHit key m === Just ()
     ),
     ( "insert pop",
-      Hedgehog.property do
-        keys <- Set.toList <$> Hedgehog.forAll (Gen.set (Range.linear 1 1000) (Gen.word64 Range.linearBounded))
-        keys === wordMapKeysList (listToWordMap (map (,()) keys))
+      Hedgehog.withTests 1000 do
+        Hedgehog.property do
+          keys <- Set.toList <$> Hedgehog.forAll (Gen.set (Range.linear 1 1000) (Gen.word64 Range.linearBounded))
+          keys === wordMapKeysList (listToWordMap (map (,()) keys))
     ),
     ( "insert splitL",
-      Hedgehog.property do
-        keys <- Hedgehog.forAll (Gen.list (Range.linear 1 1000) (Gen.word64 Range.linearBounded))
-        key <- Hedgehog.forAll (Gen.word64 Range.linearBounded)
-        let WordMap.Pair xs ys = WordMap.splitL key (listToWordMap (map (,()) keys))
-        Hedgehog.assert (all (<= key) (wordMapKeysList xs))
-        Hedgehog.assert (all (> key) (wordMapKeysList ys))
+      Hedgehog.withTests 1000 do
+        Hedgehog.property do
+          keys <- Hedgehog.forAll (Gen.list (Range.linear 1 1000) (Gen.word64 Range.linearBounded))
+          key <- Hedgehog.forAll (Gen.word64 Range.linearBounded)
+          let WordMap.Pair xs ys = WordMap.splitL key (listToWordMap (map (,()) keys))
+          Hedgehog.assert (all (<= key) (wordMapKeysList xs))
+          Hedgehog.assert (all (> key) (wordMapKeysList ys))
     ),
     ( "valid internal structure",
       Hedgehog.property do
@@ -60,9 +63,9 @@ tests =
         commands <-
           Hedgehog.forAll do
             Gen.list
-              (Range.linear 1 1000)
+              (Range.linear 1 10000)
               ( Gen.frequency
-                  [ (10, Insert <$> Gen.word64 Range.linearBounded <*> Gen.word8 Range.linearBounded),
+                  [ (50, Insert <$> Gen.word64 Range.linearBounded <*> Gen.word8 Range.linearBounded),
                     (10, Delete <$> Gen.word64 Range.linearBounded),
                     (10, pure Pop),
                     (10, KeepL <$> Gen.word64 Range.linearBounded),
@@ -83,7 +86,7 @@ data Command a
 
 applyCommand :: Command a -> WordMap a -> WordMap a
 applyCommand = \case
-  Delete k -> WordMap.delete k
+  Delete k -> WordMap.deleteExpectingHit k
   Insert k v -> WordMap.insert k v
   KeepL k -> \m -> case WordMap.splitL k m of WordMap.Pair x _ -> x
   KeepR k -> \m -> case WordMap.splitL k m of WordMap.Pair _ x -> x
@@ -94,20 +97,20 @@ applyCommand = \case
 
 wordMapIsValid :: WordMap a -> Bool
 wordMapIsValid = \case
-  WordMap.Bin p m l r ->
+  WordMap.Bin p m@(WordMap.Mask m0) l r ->
     and
       [ -- Bin doesn't have Nil children
         not (isNil l),
         not (isNil r),
         -- mask is a power of two
-        popCount m == 1,
+        popCount m0 == 1,
         -- mask is the highest bit position at which two keys of the map differ, so the prefix to the left of the mask
         -- should be the same for every element, which should also be `p` (all 0s or all 1s)
-        allSame p (map (`WordMap.mask` m) (wordMapKeysList l)) (map (`WordMap.mask` m) (wordMapKeysList r)),
+        allSame p (map (`WordMap.prefixof` m) (wordMapKeysList l)) (map (`WordMap.prefixof` m) (wordMapKeysList r)),
         -- none of the left have the mask bit set
-        all (\w -> w .&. m == 0) (wordMapKeysList l),
+        all (\w -> w .&. m0 == 0) (wordMapKeysList l),
         -- all of the right have the mask bit set
-        all (\w -> w .&. m /= 0) (wordMapKeysList r)
+        all (\w -> w .&. m0 /= 0) (wordMapKeysList r)
       ]
   WordMap.Tip _ _ -> True
   WordMap.Nil -> True
