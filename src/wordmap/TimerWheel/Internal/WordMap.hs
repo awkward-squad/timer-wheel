@@ -15,6 +15,9 @@ module TimerWheel.Internal.WordMap
 
     -- * Strict pair
     Pair (..),
+
+    -- * Internals
+    mask,
   )
 where
 
