@@ -75,11 +75,13 @@ library
     atomic-primops ^>= 0.8,
     ki ^>= 1.0.0,
     primitive ^>= 0.7 || ^>= 0.8,
+    psqueues ^>= 0.2.7,
     wordmap,
   exposed-modules:
     TimerWheel
   hs-source-dirs: src
   other-modules:
+    TimerWheel.Internal.Bucket
     TimerWheel.Internal.Counter
     TimerWheel.Internal.Nanoseconds
     TimerWheel.Internal.Prelude

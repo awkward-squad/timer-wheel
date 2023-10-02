@@ -38,14 +38,14 @@ import Data.Primitive.Array (MutableArray)
 import qualified Data.Primitive.Array as Array
 import GHC.Base (RealWorld)
 import qualified Ki
+import TimerWheel.Internal.Bucket (Bucket)
+import qualified TimerWheel.Internal.Bucket as Bucket
 import TimerWheel.Internal.Counter (Counter, decrCounter_, incrCounter, incrCounter_, newCounter, readCounter)
 import TimerWheel.Internal.Nanoseconds (Nanoseconds (..))
 import qualified TimerWheel.Internal.Nanoseconds as Nanoseconds
 import TimerWheel.Internal.Prelude
 import TimerWheel.Internal.Timestamp (Timestamp)
 import qualified TimerWheel.Internal.Timestamp as Timestamp
-import TimerWheel.Internal.WordMap (WordMap)
-import qualified TimerWheel.Internal.WordMap as WordMap
 
 -- | A timer wheel is a vector-of-collections-of timers to fire. Timers may be one-shot or recurring, and may be
 -- scheduled arbitrarily far in the future.
@@ -90,7 +90,7 @@ import qualified TimerWheel.Internal.WordMap as WordMap
 -- |          |         | 'recurring_'   |
 -- +----------+---------+----------------+
 data TimerWheel = TimerWheel
-  { buckets :: {-# UNPACK #-} !(MutableArray RealWorld TimerBucket),
+  { buckets :: {-# UNPACK #-} !(MutableArray RealWorld (Bucket Timer0)),
     resolution :: {-# UNPACK #-} !Nanoseconds,
     numTimers :: {-# UNPACK #-} !Counter,
     -- A counter to generate unique ints that identify registered actions, so they can be canceled.
@@ -126,7 +126,7 @@ create ::
   -- | ​
   IO TimerWheel
 create scope (Config spokes0 resolution0) = do
-  buckets <- Array.newArray spokes WordMap.empty
+  buckets <- Array.newArray spokes Bucket.empty
   numTimers <- newCounter
   timerIdSupply <- newCounter
   Ki.fork_ scope (runTimerReaperThread buckets numTimers resolution)
@@ -174,12 +174,12 @@ register TimerWheel {buckets, numTimers, resolution, timerIdSupply} delay action
   let index = timestampToIndex buckets resolution timestamp
   timerId <- incrCounter timerIdSupply
   mask_ do
-    atomicModifyArray buckets index (timerBucketInsert timestamp (OneShot timerId action))
+    atomicModifyArray buckets index (Bucket.insert timerId (coerce @Timestamp @Word64 timestamp) (OneShot1 action))
     incrCounter_ numTimers
   coerce @(IO (IO Bool)) @(IO (Timer Bool)) do
     pure do
       mask_ do
-        deleted <- atomicMaybeModifyArray buckets index (timerBucketDelete timestamp timerId)
+        deleted <- atomicMaybeModifyArray buckets index (Bucket.delete timerId)
         when deleted (decrCounter_ numTimers)
         pure deleted
 
@@ -214,7 +214,7 @@ recurring TimerWheel {buckets, numTimers, resolution, timerIdSupply} (Nanosecond
   timerId <- incrCounter timerIdSupply
   canceledRef <- newIORef False
   mask_ do
-    atomicModifyArray buckets index (timerBucketInsert timestamp (Recurring timerId action delay canceledRef))
+    atomicModifyArray buckets index (Bucket.insert timerId (coerce @Timestamp @Word64 timestamp) (Recurring1 action delay canceledRef))
     incrCounter_ numTimers
   coerce @(IO (IO ())) @(IO (Timer ())) do
     pure do
@@ -236,7 +236,7 @@ recurring_ TimerWheel {buckets, numTimers, resolution, timerIdSupply} (Nanosecon
   let index = timestampToIndex buckets resolution timestamp
   timerId <- incrCounter timerIdSupply
   mask_ do
-    atomicModifyArray buckets index (timerBucketInsert timestamp (Recurring_ timerId action delay))
+    atomicModifyArray buckets index (Bucket.insert timerId (coerce @Timestamp @Word64 timestamp) (Recurring1_ action delay))
     incrCounter_ numTimers
 
 -- | A registered timer, parameterized by the result of attempting to cancel it:
@@ -286,61 +286,10 @@ timestampToIndex buckets resolution timestamp =
   fromIntegral @Word64 @Int
     (Timestamp.epoch resolution timestamp `rem` fromIntegral @Int @Word64 (Array.sizeofMutableArray buckets))
 
-------------------------------------------------------------------------------------------------------------------------
--- Timer bucket operations
-
-type TimerBucket =
-  WordMap Timers
-
-timerBucketDelete :: Timestamp -> TimerId -> TimerBucket -> Maybe TimerBucket
-timerBucketDelete (coerce @Timestamp @Word64 -> timestamp) timerId bucket =
-  case WordMap.lookupExpectingHit timestamp bucket of
-    Nothing -> Nothing
-    Just (Timers1 timer)
-      | timerId == getTimerId timer -> Just $! WordMap.deleteExpectingHit timestamp bucket
-      | otherwise -> Nothing
-    Just (TimersN timers0) ->
-      case timersDelete timerId timers0 of
-        Nothing -> Nothing
-        Just timers1 ->
-          let timers2 =
-                case timers1 of
-                  [timer] -> Timers1 timer
-                  _ -> TimersN timers1
-           in Just $! WordMap.insert timestamp timers2 bucket
-
-timerBucketInsert :: Timestamp -> Timer0 -> TimerBucket -> TimerBucket
-timerBucketInsert timestamp timer =
-  WordMap.upsert (coerce @Timestamp @Word64 timestamp) (Timers1 timer) \case
-    Timers1 old -> TimersN [timer, old]
-    TimersN old -> TimersN (timer : old)
-
-data Timers
-  = Timers1 !Timer0
-  | -- 2+ timers, stored in the reverse order that they were enqueued (so the last should fire first)
-    TimersN ![Timer0]
-
-timersDelete :: TimerId -> [Timer0] -> Maybe [Timer0]
-timersDelete timerId =
-  go
-  where
-    go :: [Timer0] -> Maybe [Timer0]
-    go = \case
-      [] -> Nothing
-      timer : timers
-        | timerId == getTimerId timer -> Just timers
-        | otherwise -> (timer :) <$> go timers
-
 data Timer0
-  = OneShot !TimerId !(IO ())
-  | Recurring !TimerId !(IO ()) !Nanoseconds !(IORef Bool)
-  | Recurring_ !TimerId !(IO ()) !Nanoseconds
-
-getTimerId :: Timer0 -> TimerId
-getTimerId = \case
-  OneShot timerId _ -> timerId
-  Recurring timerId _ _ _ -> timerId
-  Recurring_ timerId _ _ -> timerId
+  = OneShot1 !(IO ())
+  | Recurring1 !(IO ()) !Nanoseconds !(IORef Bool)
+  | Recurring1_ !(IO ()) !Nanoseconds
 
 type TimerId =
   Int
@@ -371,16 +320,16 @@ atomicMaybeModifyArray buckets index doDelete = do
           (success, ticket1) <- Atomics.casArrayElem buckets index ticket bucket
           if success then pure True else loop ticket1
 
-atomicExtractExpiredTimersFromBucket :: MutableArray RealWorld TimerBucket -> Int -> Timestamp -> IO TimerBucket
+atomicExtractExpiredTimersFromBucket :: MutableArray RealWorld (Bucket Timer0) -> Int -> Timestamp -> IO (Bucket Timer0)
 atomicExtractExpiredTimersFromBucket buckets index (coerce @Timestamp @Word64 -> now) = do
   ticket0 <- Atomics.readArrayElem buckets index
   loop ticket0
   where
-    loop :: Atomics.Ticket TimerBucket -> IO TimerBucket
+    loop :: Atomics.Ticket (Bucket Timer0) -> IO (Bucket Timer0)
     loop ticket = do
-      let WordMap.Pair expired bucket1 = WordMap.splitL now (Atomics.peekTicket ticket)
-      if WordMap.isEmpty expired
-        then pure WordMap.empty
+      let (expired, bucket1) = Bucket.partition now (Atomics.peekTicket ticket)
+      if Bucket.isEmpty expired
+        then pure Bucket.empty
         else do
           (success, ticket1) <- Atomics.casArrayElem buckets index ticket bucket1
           if success then pure expired else loop ticket1
@@ -478,7 +427,7 @@ atomicExtractExpiredTimersFromBucket buckets index (coerce @Timestamp @Word64 ->
 -- If the actual time is at or after the next ideal time, that's kind of bad - it means the reaper thread is behind
 -- schedule. The user's enqueued actions have taken too long, or their wheel resolution is too short. Anyway, it's not
 -- our problem, our behavior doesn't change per whether we are behind schedule or not.
-runTimerReaperThread :: MutableArray RealWorld TimerBucket -> Counter -> Nanoseconds -> IO void
+runTimerReaperThread :: MutableArray RealWorld (Bucket Timer0) -> Counter -> Nanoseconds -> IO void
 runTimerReaperThread buckets numTimers resolution = do
   -- Sleep until the very first bucket of timers expires
   --
@@ -506,53 +455,39 @@ runTimerReaperThread buckets numTimers resolution = do
     -- `index` could be derived from `thisTime`, but it's cheaper to just store it separately and bump by 1 as we go
     theLoop :: Timestamp -> Int -> IO void
     theLoop !idealTime !index = do
-      expired <- atomicExtractExpiredTimersFromBucket buckets index idealTime
-      fireTimerBucket expired
+      expired2 <- atomicExtractExpiredTimersFromBucket buckets index idealTime
+      fireTimerBucket expired2
       let !nextIdealTime = idealTime `Timestamp.plus` resolution
       now <- Timestamp.now
       when (nextIdealTime > now) (Nanoseconds.sleep (nextIdealTime `Timestamp.unsafeMinus` now))
       theLoop nextIdealTime ((index + 1) `rem` Array.sizeofMutableArray buckets)
       where
-        fireTimerBucket :: TimerBucket -> IO ()
+        fireTimerBucket :: Bucket Timer0 -> IO ()
         fireTimerBucket bucket0 =
-          case WordMap.pop bucket0 of
-            WordMap.PopNada -> pure ()
-            WordMap.PopAlgo timestamp timers bucket1 ->
-              case timers of
-                Timers1 timer -> do
-                  expired2 <- fireTimer bucket1 (coerce @Word64 @Timestamp timestamp) timer
-                  fireTimerBucket expired2
-                TimersN timers1 -> do
-                  bucket2 <- fireTimers bucket1 (coerce @Word64 @Timestamp timestamp) timers1
-                  fireTimerBucket bucket2
+          case Bucket.pop bucket0 of
+            Bucket.PopNada -> pure ()
+            Bucket.PopAlgo timerId timestamp timer bucket1 -> do
+              expired2 <- fireTimer bucket1 timerId (coerce @Word64 @Timestamp timestamp) timer
+              fireTimerBucket expired2
 
-        fireTimers :: TimerBucket -> Timestamp -> [Timer0] -> IO TimerBucket
-        fireTimers bucket timestamp =
-          foldr step (pure bucket)
-          where
-            step :: Timer0 -> IO TimerBucket -> IO TimerBucket
-            step timer earlier = do
-              expired1 <- earlier
-              fireTimer expired1 timestamp timer
-
-        fireTimer :: TimerBucket -> Timestamp -> Timer0 -> IO TimerBucket
-        fireTimer bucket timestamp timer =
+        fireTimer :: Bucket Timer0 -> TimerId -> Timestamp -> Timer0 -> IO (Bucket Timer0)
+        fireTimer bucket timerId timestamp timer =
           case timer of
-            OneShot _ action -> do
+            OneShot1 action -> do
               action
               decrCounter_ numTimers
               pure bucket
-            Recurring _ action delay canceledRef ->
+            Recurring1 action delay canceledRef ->
               readIORef canceledRef >>= \case
                 True -> pure bucket
                 False -> do
                   action
                   scheduleNextOccurrence (timestamp `Timestamp.plus` delay)
-            Recurring_ _ action delay -> do
+            Recurring1_ action delay -> do
               action
               scheduleNextOccurrence (timestamp `Timestamp.plus` delay)
           where
-            scheduleNextOccurrence :: Timestamp -> IO TimerBucket
+            scheduleNextOccurrence :: Timestamp -> IO (Bucket Timer0)
             scheduleNextOccurrence nextOccurrence =
               if nextOccurrence < idealTime
                 then pure $! insertNextOccurrence bucket
@@ -563,6 +498,6 @@ runTimerReaperThread buckets numTimers resolution = do
                     insertNextOccurrence
                   pure bucket
               where
-                insertNextOccurrence :: TimerBucket -> TimerBucket
+                insertNextOccurrence :: Bucket Timer0 -> Bucket Timer0
                 insertNextOccurrence =
-                  timerBucketInsert nextOccurrence timer
+                  Bucket.insert timerId (coerce @Timestamp @Word64 nextOccurrence) timer
