@@ -71,28 +71,43 @@ partition q =
 --
 -- If a timer with the given id is already in the bucket, behavior is undefined.
 insert :: forall a. TimerId -> Timestamp -> a -> Bucket a -> Bucket a
-insert i p x t =
-  case t of
+insert i p x bucket =
+  case bucket of
     Nil -> Tip i p x
     Tip j q y
-      | (p, i) < (q, j) -> link i p x j t Nil
-      | otherwise -> link j q y i (Tip i p x) Nil
+      | betteri -> linki j bucket Nil
+      | otherwise -> linkj i (Tip i p x) Nil
+      where
+        betteri = (p, i) < (q, j)
+        {-# INLINE betteri #-}
+        linkj = link j q y
+        {-# INLINE linkj #-}
     Bin j q y m l r
-      | prefixNotEqual m i j ->
-          if (p, i) < (q, j)
-            then link i p x j t Nil
-            else link j q y i (Tip i p x) (merge m l r)
-      | (p, i) < (q, j) ->
-          if goleft j m
-            then Bin i p x m (insert j q y l) r
-            else Bin i p x m l (insert j q y r)
-      | otherwise ->
-          if goleft i m
-            then Bin j q y m (insert i p x l) r
-            else Bin j q y m l (insert i p x r)
+      | betteri ->
+          if
+            | prefixNotEqual m i j -> linki j bucket Nil
+            | goleft j m -> bini (insertj l) r
+            | otherwise -> bini l (insertj r)
+      | prefixNotEqual m i j -> link j q y i (Tip i p x) (merge m l r)
+      | goleft i m -> binj (inserti l) r
+      | otherwise -> binj l (inserti r)
+      where
+        betteri = (p, i) < (q, j)
+        {-# INLINE betteri #-}
+        bini = Bin i p x m
+        {-# INLINE bini #-}
+        binj = Bin j q y m
+        {-# INLINE binj #-}
+        inserti = insert i p x
+        {-# INLINE inserti #-}
+        insertj = insert j q y
+        {-# INLINE insertj #-}
+  where
+    linki = link i p x
+    {-# INLINE linki #-}
 
 data Pop a
-  = PopAlgo !TimerId !Timestamp !a !(Bucket a)
+  = PopAlgo {-# UNPACK #-} !TimerId {-# UNPACK #-} !Timestamp !a !(Bucket a)
   | PopNada
 
 pop :: Bucket a -> Pop a
@@ -120,47 +135,19 @@ deleteExpectingHit i =
         | goleft i m -> (\l1 -> bin j p x m l1 r) <$> go l
         | otherwise -> bin j p x m l <$> go r
 
-i2w :: TimerId -> Word64
-i2w = fromIntegral
-{-# INLINE i2w #-}
-
-goleft :: TimerId -> Mask -> Bool
-goleft i m =
-  i2w i .&. m == 0
-{-# INLINE goleft #-}
-
--- m = 00001000000000000000000
--- i = IIII???????????????????
--- j = JJJJ???????????????????
---
--- prefixNotEqual m i j answers, is IIII not equal to JJJJ?
-prefixNotEqual :: Mask -> TimerId -> TimerId -> Bool
-prefixNotEqual (prefixMask -> e) i j =
-  i2w i .&. e /= i2w j .&. e
-{-# INLINE prefixNotEqual #-}
-
---            m = 0000000000100000
--- prefixMask m = 1111111111000000
-prefixMask :: Word64 -> Word64
-prefixMask m = -m `xor` m
-{-# INLINE prefixMask #-}
-
-onlyHighestBit :: Word64 -> Mask
-onlyHighestBit w = unsafeShiftL 1 (63 - countLeadingZeros w)
-{-# INLINE onlyHighestBit #-}
-
-link :: TimerId -> Timestamp -> v -> TimerId -> Bucket v -> Bucket v -> Bucket v
-link i p x j l r
-  | goleft j m = Bin i p x m l r
-  | otherwise = Bin i p x m r l
-  where
-    m = onlyHighestBit (i2w i `xor` i2w j)
-
 -- | 'Bin' smart constructor, respecting the invariant that both children can't be 'Nil'.
 bin :: TimerId -> Timestamp -> v -> Mask -> Bucket v -> Bucket v -> Bucket v
 bin i p x _ Nil Nil = Tip i p x
 bin i p x m l r = Bin i p x m l r
 {-# INLINE bin #-}
+
+link :: TimerId -> Timestamp -> v -> TimerId -> Bucket v -> Bucket v -> Bucket v
+link i p x j t u
+  | goleft j m = Bin i p x m t u
+  | otherwise = Bin i p x m u t
+  where
+    m = onlyHighestBit (i2w i `xor` i2w j)
+{-# INLINE link #-}
 
 -- Merge two disjoint buckets that have the same mask.
 merge :: Mask -> Bucket v -> Bucket v -> Bucket v
@@ -246,6 +233,42 @@ merge m l r =
       --    ll    lr
       --
       | otherwise -> Bin j q y m l (merge o rl rr)
+
+------------------------------------------------------------------------------------------------------------------------
+-- Bit fiddling
+
+-- | Is (or should) this timer be stored on the left of this bin, given its mask?
+goleft :: TimerId -> Mask -> Bool
+goleft i m =
+  i2w i .&. m == 0
+{-# INLINE goleft #-}
+
+-- m = 00001000000000000000000
+-- i = IIII???????????????????
+-- j = JJJJ???????????????????
+--
+-- prefixNotEqual m i j answers, is IIII not equal to JJJJ?
+prefixNotEqual :: Mask -> TimerId -> TimerId -> Bool
+prefixNotEqual (prefixMask -> e) i j =
+  i2w i .&. e /= i2w j .&. e
+{-# INLINE prefixNotEqual #-}
+
+--            m = 0000000000100000
+-- prefixMask m = 1111111111000000
+prefixMask :: Word64 -> Word64
+prefixMask m = -m `xor` m
+{-# INLINE prefixMask #-}
+
+onlyHighestBit :: Word64 -> Mask
+onlyHighestBit w = unsafeShiftL 1 (63 - countLeadingZeros w)
+{-# INLINE onlyHighestBit #-}
+
+i2w :: TimerId -> Word64
+i2w = fromIntegral
+{-# INLINE i2w #-}
+
+------------------------------------------------------------------------------------------------------------------------
+-- Strict pair
 
 data Pair a b
   = Pair !a !b

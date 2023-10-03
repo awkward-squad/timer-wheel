@@ -42,6 +42,7 @@ common component
     GeneralizedNewtypeDeriving
     LambdaCase
     MultiParamTypeClasses
+    MultiWayIf
     NamedFieldPuns
     NoImplicitPrelude
     NumericUnderscores
