@@ -75,8 +75,6 @@ library
     atomic-primops ^>= 0.8,
     ki ^>= 1.0.0,
     primitive ^>= 0.7 || ^>= 0.8,
-    psqueues ^>= 0.2.7,
-    wordmap,
   exposed-modules:
     TimerWheel
   hs-source-dirs: src
@@ -87,33 +85,14 @@ library
     TimerWheel.Internal.Prelude
     TimerWheel.Internal.Timestamp
 
-library wordmap
-  import: component
-  exposed-modules:
-    TimerWheel.Internal.WordMap
-  hs-source-dirs: src/wordmap
-  visibility: private
-
-test-suite timer-wheel-tests
+test-suite tests
   import: component
   build-depends:
     ki,
     random ^>= 1.2,
     timer-wheel,
   ghc-options: -threaded -with-rtsopts=-N2
-  hs-source-dirs: test/timer-wheel
-  main-is: Main.hs
-  type: exitcode-stdio-1.0
-
-test-suite wordmap-tests
-  import: component
-  build-depends:
-    containers ^>= 0.6 || ^>= 0.7,
-    hedgehog ^>= 1.4,
-    ki,
-    wordmap,
-  ghc-options: -threaded -with-rtsopts=-N2
-  hs-source-dirs: test/wordmap
+  hs-source-dirs: test
   main-is: Main.hs
   type: exitcode-stdio-1.0
 

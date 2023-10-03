@@ -174,12 +174,12 @@ register TimerWheel {buckets, numTimers, resolution, timerIdSupply} delay action
   let index = timestampToIndex buckets resolution timestamp
   timerId <- incrCounter timerIdSupply
   mask_ do
-    atomicModifyArray buckets index (Bucket.insert timerId (coerce @Timestamp @Word64 timestamp) (OneShot1 action))
+    atomicModifyArray buckets index (Bucket.insert timerId timestamp (OneShot1 action))
     incrCounter_ numTimers
   coerce @(IO (IO Bool)) @(IO (Timer Bool)) do
     pure do
       mask_ do
-        deleted <- atomicMaybeModifyArray buckets index (Bucket.delete timerId)
+        deleted <- atomicMaybeModifyArray buckets index (Bucket.deleteExpectingHit timerId)
         when deleted (decrCounter_ numTimers)
         pure deleted
 
@@ -214,7 +214,7 @@ recurring TimerWheel {buckets, numTimers, resolution, timerIdSupply} (Nanosecond
   timerId <- incrCounter timerIdSupply
   canceledRef <- newIORef False
   mask_ do
-    atomicModifyArray buckets index (Bucket.insert timerId (coerce @Timestamp @Word64 timestamp) (Recurring1 action delay canceledRef))
+    atomicModifyArray buckets index (Bucket.insert timerId timestamp (Recurring1 action delay canceledRef))
     incrCounter_ numTimers
   coerce @(IO (IO ())) @(IO (Timer ())) do
     pure do
@@ -236,7 +236,7 @@ recurring_ TimerWheel {buckets, numTimers, resolution, timerIdSupply} (Nanosecon
   let index = timestampToIndex buckets resolution timestamp
   timerId <- incrCounter timerIdSupply
   mask_ do
-    atomicModifyArray buckets index (Bucket.insert timerId (coerce @Timestamp @Word64 timestamp) (Recurring1_ action delay))
+    atomicModifyArray buckets index (Bucket.insert timerId timestamp (Recurring1_ action delay))
     incrCounter_ numTimers
 
 -- | A registered timer, parameterized by the result of attempting to cancel it:
@@ -321,13 +321,13 @@ atomicMaybeModifyArray buckets index doDelete = do
           if success then pure True else loop ticket1
 
 atomicExtractExpiredTimersFromBucket :: MutableArray RealWorld (Bucket Timer0) -> Int -> Timestamp -> IO (Bucket Timer0)
-atomicExtractExpiredTimersFromBucket buckets index (coerce @Timestamp @Word64 -> now) = do
+atomicExtractExpiredTimersFromBucket buckets index now = do
   ticket0 <- Atomics.readArrayElem buckets index
   loop ticket0
   where
     loop :: Atomics.Ticket (Bucket Timer0) -> IO (Bucket Timer0)
     loop ticket = do
-      let (expired, bucket1) = Bucket.partition now (Atomics.peekTicket ticket)
+      let Bucket.Pair expired bucket1 = Bucket.partition now (Atomics.peekTicket ticket)
       if Bucket.isEmpty expired
         then pure Bucket.empty
         else do
@@ -467,7 +467,7 @@ runTimerReaperThread buckets numTimers resolution = do
           case Bucket.pop bucket0 of
             Bucket.PopNada -> pure ()
             Bucket.PopAlgo timerId timestamp timer bucket1 -> do
-              expired2 <- fireTimer bucket1 timerId (coerce @Word64 @Timestamp timestamp) timer
+              expired2 <- fireTimer bucket1 timerId timestamp timer
               fireTimerBucket expired2
 
         fireTimer :: Bucket Timer0 -> TimerId -> Timestamp -> Timer0 -> IO (Bucket Timer0)
@@ -500,4 +500,4 @@ runTimerReaperThread buckets numTimers resolution = do
               where
                 insertNextOccurrence :: Bucket Timer0 -> Bucket Timer0
                 insertNextOccurrence =
-                  Bucket.insert timerId (coerce @Timestamp @Word64 nextOccurrence) timer
+                  Bucket.insert timerId nextOccurrence timer
