@@ -1,3 +1,37 @@
+-- Code from this implementation was cribbed from `psqueues`, whose license is copied below.
+--
+-- The Glasgow Haskell Compiler License
+--
+-- Copyright 2004, The University Court of the University of Glasgow.
+-- All rights reserved.
+--
+-- Redistribution and use in source and binary forms, with or without
+-- modification, are permitted provided that the following conditions are met:
+--
+-- - Redistributions of source code must retain the above copyright notice,
+-- this list of conditions and the following disclaimer.
+--
+-- - Redistributions in binary form must reproduce the above copyright notice,
+-- this list of conditions and the following disclaimer in the documentation
+-- and/or other materials provided with the distribution.
+--
+-- - Neither name of the University nor the names of its contributors may be
+-- used to endorse or promote products derived from this software without
+-- specific prior written permission.
+--
+-- THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY COURT OF THE UNIVERSITY OF
+-- GLASGOW AND THE CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES,
+-- INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+-- FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+-- UNIVERSITY COURT OF THE UNIVERSITY OF GLASGOW OR THE CONTRIBUTORS BE LIABLE
+-- FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+-- DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+-- SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+-- CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+-- LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+-- OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
+-- DAMAGE.
+
 module TimerWheel.Internal.Bucket
   ( Bucket,
     empty,
@@ -26,7 +60,9 @@ data Bucket a
     --   1. `l` and `r` can't both be Nil
     --   2. `p` is <= all `p` in `l` and `r`
     --   3. `k` is not an element of `l` nor `r`
-    --   4. `m` has one 1-bit, which is the highest bit position at which any two keys in `l` and `r` differ
+    --   4. `m` has one 1-bit, which is (usually) the highest bit position at which any two keys in `k`+`l`+`r` differ
+    --      (henceforth referred to as the diffbit). It can get out-of-date by deletions and pops. Thus, `m` represents
+    --      a left-bound on the diffbit, that is, the true diffbit can be no left-er than `m`.
     --   5. No key in `l` has the `m` bit set
     --   6. All keys in `r` have the `m` bit set
     Bin {-# UNPACK #-} !TimerId {-# UNPACK #-} !Timestamp !a {-# UNPACK #-} !Mask !(Bucket a) !(Bucket a)
@@ -79,32 +115,25 @@ insert i p x bucket =
       | otherwise -> linkj i (Tip i p x) Nil
       where
         betteri = (p, i) < (q, j)
-        {-# INLINE betteri #-}
         linkj = link j q y
-        {-# INLINE linkj #-}
     Bin j q y m l r
       | betteri ->
           if
             | prefixNotEqual m i j -> linki j bucket Nil
             | goleft j m -> bini (insertj l) r
             | otherwise -> bini l (insertj r)
-      | prefixNotEqual m i j -> link j q y i (Tip i p x) (merge m l r)
+      | prefixNotEqual m i j -> linkj i (Tip i p x) (merge m l r)
       | goleft i m -> binj (inserti l) r
       | otherwise -> binj l (inserti r)
       where
         betteri = (p, i) < (q, j)
-        {-# INLINE betteri #-}
         bini = Bin i p x m
-        {-# INLINE bini #-}
         binj = Bin j q y m
-        {-# INLINE binj #-}
         inserti = insert i p x
-        {-# INLINE inserti #-}
         insertj = insert j q y
-        {-# INLINE insertj #-}
+        linkj = link j q y
   where
     linki = link i p x
-    {-# INLINE linki #-}
 
 data Pop a
   = PopAlgo {-# UNPACK #-} !TimerId {-# UNPACK #-} !Timestamp !a !(Bucket a)
@@ -130,7 +159,7 @@ deleteExpectingHit i =
         | otherwise -> Nothing
       Bin j p x m l r
         -- This commented out short-circuit is what makes this delete variant "expecting a hit"
-        --   | nomatch m i j -> Nothing
+        --   | prefixNotEqual m i j -> Nothing
         | i == j -> Just $! merge m l r
         | goleft i m -> (\l1 -> bin j p x m l1 r) <$> go l
         | otherwise -> bin j p x m l <$> go r
