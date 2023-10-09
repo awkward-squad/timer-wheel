@@ -119,13 +119,14 @@ insert i p x bucket =
     Bin j q y m l r
       | betteri ->
           if
-            | prefixNotEqual m i j -> linki j bucket Nil
+            | outsider -> linki j bucket Nil
             | goleft j m -> bini (insertj l) r
             | otherwise -> bini l (insertj r)
-      | prefixNotEqual m i j -> linkj i (Tip i p x) (merge m l r)
+      | outsider -> linkj i (Tip i p x) (merge m l r)
       | goleft i m -> binj (inserti l) r
       | otherwise -> binj l (inserti r)
       where
+        outsider = prefixNotEqual m i j
         betteri = (p, i) < (q, j)
         bini = Bin i p x m
         binj = Bin j q y m
