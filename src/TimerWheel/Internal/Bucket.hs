@@ -1,3 +1,5 @@
+{-# LANGUAGE CPP #-}
+
 -- Code from this implementation was cribbed from `psqueues`, whose license is copied below.
 --
 -- The Glasgow Haskell Compiler License
@@ -54,6 +56,8 @@ where
 import Data.Bits
 import TimerWheel.Internal.Prelude
 import TimerWheel.Internal.Timestamp (Timestamp)
+
+#include "MachDeps.h"
 
 data Bucket a
   = -- Invariants on `Bin k p v m l r`:
@@ -290,7 +294,7 @@ prefixMask m = -m `xor` m
 {-# INLINE prefixMask #-}
 
 onlyHighestBit :: Word64 -> Mask
-onlyHighestBit w = unsafeShiftL 1 (63 - countLeadingZeros w)
+onlyHighestBit w = unsafeShiftL 1 (WORD_SIZE_IN_BITS - 1 - countLeadingZeros w)
 {-# INLINE onlyHighestBit #-}
 
 i2w :: TimerId -> Word64
