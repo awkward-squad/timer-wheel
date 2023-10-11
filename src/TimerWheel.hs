@@ -195,9 +195,8 @@ register_ ::
 register_ wheel delay action =
   void (register wheel delay action)
 
--- | @recurring wheel action delay@ registers __@action@__ in __@wheel@__ to fire every __@delay@__ seconds.
---
--- Returns an action that cancels the recurring timer.
+-- | @recurring wheel action delay@ registers __@action@__ in __@wheel@__ to fire in __@delay@__ seconds, and every
+-- __@delay@__ seconds thereafter.
 recurring ::
   -- | The timer wheel
   TimerWheel ->
@@ -222,7 +221,7 @@ recurring TimerWheel {buckets, numTimers, resolution, timerIdSupply} (Nanosecond
         writeIORef canceledRef True
         decrCounter_ numTimers
 
--- | Like 'recurring', but for when you don't intend to 'cancel' the timer.
+-- | Like 'recurring', but for when you don't intend to cancel the timer.
 recurring_ ::
   TimerWheel ->
   -- | The delay before each action is fired
