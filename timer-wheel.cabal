@@ -105,7 +105,7 @@ benchmark bench
   build-depends:
     ki,
     random ^>= 1.2,
-    tasty-bench,
+    tasty-bench ^>= 0.3.5,
     timer-wheel,
   ghc-options: -fproc-alignment=64 -rtsopts -threaded "-with-rtsopts=-N2 -T -A32m"
   hs-source-dirs: bench
