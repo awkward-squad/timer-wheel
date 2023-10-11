@@ -8,9 +8,9 @@
 #
 # For more information, see https://github.com/haskell-CI/haskell-ci
 #
-# version: 0.17.20230922
+# version: 0.17.20231010
 #
-# REGENDATA ("0.17.20230922",["github","timer-wheel.cabal"])
+# REGENDATA ("0.17.20231010",["github","timer-wheel.cabal"])
 #
 name: Haskell-CI
 on:
@@ -28,19 +28,19 @@ jobs:
     strategy:
       matrix:
         include:
-          - compiler: ghc-9.6.2
+          - compiler: ghc-9.8.1
             compilerKind: ghc
-            compilerVersion: 9.6.2
+            compilerVersion: 9.8.1
+            setup-method: ghcup
+            allow-failure: false
+          - compiler: ghc-9.6.3
+            compilerKind: ghc
+            compilerVersion: 9.6.3
             setup-method: ghcup
             allow-failure: false
           - compiler: ghc-9.4.7
             compilerKind: ghc
             compilerVersion: 9.4.7
-            setup-method: ghcup
-            allow-failure: false
-          - compiler: ghc-9.2.8
-            compilerKind: ghc
-            compilerVersion: 9.2.8
             setup-method: ghcup
             allow-failure: false
       fail-fast: false
