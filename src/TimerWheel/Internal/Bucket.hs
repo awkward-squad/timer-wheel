@@ -69,13 +69,13 @@ data Bucket a
     --      a left-bound on the diffbit, that is, the true diffbit can be no left-er than `m`.
     --   5. No key in `l` has the `m` bit set
     --   6. All keys in `r` have the `m` bit set
-    Bin {-# UNPACK #-} !TimerId {-# UNPACK #-} !Timestamp !a {-# UNPACK #-} !Mask !(Bucket a) !(Bucket a)
-  | Tip {-# UNPACK #-} !TimerId {-# UNPACK #-} !Timestamp !a
+    Bin {-# UNPACK #-} !AlarmId {-# UNPACK #-} !Timestamp !a {-# UNPACK #-} !Mask !(Bucket a) !(Bucket a)
+  | Tip {-# UNPACK #-} !AlarmId {-# UNPACK #-} !Timestamp !a
   | Nil
 
 type Mask = Word64
 
-type TimerId = Int
+type AlarmId = Int
 
 -- | An empty bucket.
 empty :: Bucket a
@@ -110,7 +110,7 @@ partition q =
 -- | Insert a new timer into a bucket.
 --
 -- If a timer with the given id is already in the bucket, behavior is undefined.
-insert :: forall a. TimerId -> Timestamp -> a -> Bucket a -> Bucket a
+insert :: forall a. AlarmId -> Timestamp -> a -> Bucket a -> Bucket a
 insert i p x bucket =
   case bucket of
     Nil -> Tip i p x
@@ -141,7 +141,7 @@ insert i p x bucket =
     linki = link i p x
 
 data Pop a
-  = PopAlgo {-# UNPACK #-} !TimerId {-# UNPACK #-} !Timestamp !a !(Bucket a)
+  = PopAlgo {-# UNPACK #-} !AlarmId {-# UNPACK #-} !Timestamp !a !(Bucket a)
   | PopNada
 
 pop :: Bucket a -> Pop a
@@ -152,7 +152,7 @@ pop = \case
 {-# INLINE pop #-}
 
 -- | Delete a timer from a bucket, expecting it to be there.
-deleteExpectingHit :: TimerId -> Bucket v -> Maybe (Bucket v)
+deleteExpectingHit :: AlarmId -> Bucket v -> Maybe (Bucket v)
 deleteExpectingHit i =
   go
   where
@@ -170,12 +170,12 @@ deleteExpectingHit i =
         | otherwise -> bin j p x m l <$> go r
 
 -- | 'Bin' smart constructor, respecting the invariant that both children can't be 'Nil'.
-bin :: TimerId -> Timestamp -> v -> Mask -> Bucket v -> Bucket v -> Bucket v
+bin :: AlarmId -> Timestamp -> v -> Mask -> Bucket v -> Bucket v -> Bucket v
 bin i p x _ Nil Nil = Tip i p x
 bin i p x m l r = Bin i p x m l r
 {-# INLINE bin #-}
 
-link :: TimerId -> Timestamp -> v -> TimerId -> Bucket v -> Bucket v -> Bucket v
+link :: AlarmId -> Timestamp -> v -> AlarmId -> Bucket v -> Bucket v -> Bucket v
 link i p x j t u
   | goleft j m = Bin i p x m t u
   | otherwise = Bin i p x m u t
@@ -272,7 +272,7 @@ merge m l r =
 -- Bit fiddling
 
 -- | Is (or should) this timer be stored on the left of this bin, given its mask?
-goleft :: TimerId -> Mask -> Bool
+goleft :: AlarmId -> Mask -> Bool
 goleft i m =
   i2w i .&. m == 0
 {-# INLINE goleft #-}
@@ -282,7 +282,7 @@ goleft i m =
 -- j = JJJJ???????????????????
 --
 -- prefixNotEqual m i j answers, is IIII not equal to JJJJ?
-prefixNotEqual :: Mask -> TimerId -> TimerId -> Bool
+prefixNotEqual :: Mask -> AlarmId -> AlarmId -> Bool
 prefixNotEqual (prefixMask -> e) i j =
   i2w i .&. e /= i2w j .&. e
 {-# INLINE prefixNotEqual #-}
@@ -297,7 +297,7 @@ onlyHighestBit :: Word64 -> Mask
 onlyHighestBit w = unsafeShiftL 1 (WORD_SIZE_IN_BITS - 1 - countLeadingZeros w)
 {-# INLINE onlyHighestBit #-}
 
-i2w :: TimerId -> Word64
+i2w :: AlarmId -> Word64
 i2w = fromIntegral
 {-# INLINE i2w #-}
 

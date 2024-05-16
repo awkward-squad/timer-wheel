@@ -1,4 +1,9 @@
-## [1.0.0] - 2023-10-10
+## [1.0.0.1] - May 16, 2024
+
+- Fix `term-variable-capture` warnings
+- Require at least GHC 9.2
+
+## [1.0.0] - October 10, 2023
 
 - Add `count`, which returns the number of timers in a timer wheel
 - Add `Seconds` type alias for readability
@@ -12,11 +17,11 @@
 - Improve the resolution of timers from microseconds to nanoseconds
 - Simplify and optimize internals
 
-## [0.4.0.1] - 2022-11-05
+## [0.4.0.1] - November 5, 2022
 
 - Fix inaccurate haddock on `recurring`
 
-## [0.4.0] - 2022-11-05
+## [0.4.0] - November 5, 2022
 
 - Add `create`
 - Rename `Data.TimerWheel` to `TimerWheel`
@@ -24,7 +29,7 @@
 - Treat negative delays as 0
 - Drop support for GHC < 8.6
 
-## [0.3.0] - 2020-06-18
+## [0.3.0] - June 18, 2020
 
 - Add `with`
 - Add support for GHC 8.8, GHC 8.10
@@ -38,11 +43,11 @@
 - Remove `InvalidTimerWheelConfig` exception. `error` is used instead
 - Remove support for GHC < 8.6
 
-## [0.2.0.1] - 2019-05-19
+## [0.2.0.1] - May 19, 2019
 
 - Swap out `ghc-prim` and `primitive` for `vector`
 
-## [0.2.0] - 2019-02-03
+## [0.2.0] - February 3, 2019
 
 - Add `destroy` function, for reaping the background thread
 - Add `recurring_` function
@@ -57,6 +62,6 @@ spin forever and peg a CPU
 - Rename `new` to `create`
 - Make recurring timers more accurate
 
-## [0.1.0] - 2018-07-18
+## [0.1.0] - July 18, 2018
 
 - Initial release

@@ -124,7 +124,7 @@ newtype Exn a = Exn a
 class Assert a b where
   is :: a -> b -> IO ()
 
-instance (Eq e, Exception e) => Assert (IO void) (Exn e) where
+instance (Eq e, Exception e) => Assert (IO v) (Exn e) where
   is mx y = do
     try (void mx) >>= \case
       Left ex

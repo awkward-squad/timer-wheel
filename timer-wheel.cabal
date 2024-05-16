@@ -1,24 +1,25 @@
 cabal-version: 3.0
 
-author: Mitchell Rosen
+author: Mitchell Dalvi Rosen
 bug-reports: https://github.com/awkward-squad/timer-wheel/issues
 build-type: Simple
 category: Data
+copyright: (c) 2018-2024 Mitchell Dalvi Rosen, Travis Staton
+homepage: https://github.com/awkward-squad/timer-wheel
+license-file: LICENSE
+license: BSD-3-Clause
+maintainer: Mitchell Dalvi Rosen <mitchellwrosen@gmail.com>, Travis Staton <hello@travisstaton.com>
+name: timer-wheel
+synopsis: A timer wheel
+tested-with: GHC == 9.6.5, GHC == 9.8.2, GHC == 9.10.1
+version: 1.0.0.1
+
 description:
   This library provides a timer wheel data structure for registering one-shot or recurring @IO@ actions to fire after a
   given amount of time.
   .
   It is similar to @TimerManager@ from @GHC.Event@, but supports recurring actions, and can scale to handle many more
   registered actions.
-copyright: (c) 2018-2023 Mitchell Rosen, Travis Staton
-homepage: https://github.com/awkward-squad/timer-wheel
-license-file: LICENSE
-license: BSD-3-Clause
-maintainer: Mitchell Rosen <mitchellwrosen@gmail.com>, Travis Staton <hello@travisstaton.com>
-name: timer-wheel
-synopsis: A timer wheel
-tested-with: GHC == 9.4.7, GHC == 9.6.3, GHC == 9.8.1
-version: 1.0.0
 
 extra-source-files:
   CHANGELOG.md
@@ -30,28 +31,19 @@ source-repository head
 
 common component
   build-depends:
-    base ^>= 4.12 || ^>= 4.13 || ^>= 4.14 || ^>= 4.15 || ^>= 4.16 || ^>= 4.17 || ^>= 4.18 || ^>= 4.19,
+    base ^>= 4.16 || ^>= 4.17 || ^>= 4.18 || ^>= 4.19 || ^>= 4.20,
   default-extensions:
-    BangPatterns
     BlockArguments
     DeriveAnyClass
-    DeriveGeneric
     DerivingStrategies
     DuplicateRecordFields
-    FlexibleInstances
-    GeneralizedNewtypeDeriving
     LambdaCase
-    MultiParamTypeClasses
     MultiWayIf
     NamedFieldPuns
-    NoImplicitPrelude
-    NumericUnderscores
-    OverloadedStrings
-    ScopedTypeVariables
-    TupleSections
-    TypeApplications
+    NoFieldSelectors
+    OverloadedRecordDot
     ViewPatterns
-  default-language: Haskell2010
+  default-language: GHC2021
   ghc-options:
     -Weverything
     -Wno-all-missed-specialisations
@@ -83,10 +75,13 @@ library
     TimerWheel
   hs-source-dirs: src
   other-modules:
+    TimerWheel.Internal.Alarm
+    TimerWheel.Internal.AlarmBuckets
     TimerWheel.Internal.Bucket
     TimerWheel.Internal.Counter
     TimerWheel.Internal.Nanoseconds
     TimerWheel.Internal.Prelude
+    TimerWheel.Internal.Timer
     TimerWheel.Internal.Timestamp
 
 test-suite tests

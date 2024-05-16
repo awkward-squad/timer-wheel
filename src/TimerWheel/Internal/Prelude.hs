@@ -1,16 +1,17 @@
 module TimerWheel.Internal.Prelude
   ( Seconds,
-    module X,
+    module Reexport,
   )
 where
 
-import Control.Monad as X (when)
-import Data.Coerce as X (coerce)
+import Control.Monad as Reexport (when)
+import Data.Coerce as Reexport (coerce)
 import Data.Fixed (E9, Fixed)
-import Data.IORef as X (IORef, newIORef, readIORef, writeIORef)
-import Data.Word as X (Word64)
-import GHC.Generics as X (Generic)
-import Prelude as X hiding (lookup, null)
+import Data.Functor as Reexport (void)
+import Data.IORef as Reexport (IORef, newIORef, readIORef, writeIORef)
+import Data.Word as Reexport (Word64)
+import GHC.Generics as Reexport (Generic)
+import Prelude as Reexport hiding (lookup, null)
 
 -- | A number of seconds, with nanosecond precision.
 --
